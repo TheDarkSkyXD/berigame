@@ -1,8 +1,7 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useMemo } from "react";
 import { useUserInputStore, useUserStateStore, useHarvestStore, useWebsocketStore, useLoadingStore } from "../../store";
 import { webSocketStartHarvest } from "../../Api";
-import RenderGLB from "./RenderGLB";
-import { Html } from "@react-three/drei";
+import { Html, useGLTF } from "@react-three/drei";
 
 // Berry type configurations
 const BERRY_TYPES = {
@@ -18,6 +17,10 @@ const BerryTree = (props) => {
   const berryType = props.berryType || 'blueberry';
   const berryConfig = BERRY_TYPES[berryType];
   const { addLoadedAsset } = useLoadingStore();
+
+  // Load the tree model
+  const { scene } = useGLTF("/tree.glb");
+  const copiedScene = useMemo(() => scene.clone(), [scene]);
 
   const setClickedOtherObject = useUserInputStore(
     (state) => state.setClickedOtherObject
@@ -85,35 +88,12 @@ const BerryTree = (props) => {
 
   return (
     <group>
-      <RenderGLB
+      <primitive
+        ref={objRef}
+        object={copiedScene}
         onClick={onClick}
-        objRef={objRef}
-        url={"/tree.glb"}
         position={props.position || [5, 0, 0]}
       />
-
-      {/* Visual berry indicators when tree is harvestable */}
-      {isTreeHarvestable && !harvestProgress && (
-        <group position={[props.position?.[0] || 5, (props.position?.[1] || 0) + 4, props.position?.[2] || 0]}>
-          {/* Multiple berries scattered on tree top */}
-          <mesh position={[0.5, 0, 0.3]}>
-            <sphereGeometry args={[0.15, 8, 6]} />
-            <meshBasicMaterial color={berryConfig.color} />
-          </mesh>
-          <mesh position={[-0.3, 0.2, 0.1]}>
-            <sphereGeometry args={[0.12, 8, 6]} />
-            <meshBasicMaterial color={berryConfig.color} />
-          </mesh>
-          <mesh position={[0.1, -0.1, -0.4]}>
-            <sphereGeometry args={[0.13, 8, 6]} />
-            <meshBasicMaterial color={berryConfig.color} />
-          </mesh>
-          <mesh position={[-0.2, 0.1, 0.5]}>
-            <sphereGeometry args={[0.11, 8, 6]} />
-            <meshBasicMaterial color={berryConfig.color} />
-          </mesh>
-        </group>
-      )}
 
       {harvestProgress && (
         <Html position={[props.position?.[0] || 5, (props.position?.[1] || 0) + 3, props.position?.[2] || 0]}>
@@ -138,11 +118,11 @@ const BerryTree = (props) => {
               <div style={{
                 background: berryConfig.color,
                 height: '100%',
-                width: `${(harvestProgress.progress * 100)}%`,
+                width: `${((harvestProgress as any)?.progress * 100) || 0}%`,
                 transition: 'width 0.1s ease'
               }} />
             </div>
-            <div>{Math.round(harvestProgress.progress * 100)}%</div>
+            <div>{Math.round(((harvestProgress as any)?.progress * 100) || 0)}%</div>
           </div>
         </Html>
       )}
