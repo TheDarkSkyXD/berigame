@@ -60,17 +60,68 @@ describe('Inventory Store', () => {
 
   it('should add items to inventory', () => {
     const { addItem } = useInventoryStore.getState()
-    
+
     addItem({
       type: 'berry',
-      name: 'Berry',
+      subType: 'blueberry',
+      name: 'Blueberry',
       quantity: 1,
     })
-    
+
     const state = useInventoryStore.getState()
     expect(state.items).toHaveLength(1)
     expect(state.items[0].type).toBe('berry')
-    expect(state.items[0].name).toBe('Berry')
+    expect(state.items[0].subType).toBe('blueberry')
+    expect(state.items[0].name).toBe('Blueberry')
+  })
+
+  it('should stack items of the same type and subType', () => {
+    const { addItem } = useInventoryStore.getState()
+
+    // Add first blueberry
+    addItem({
+      type: 'berry',
+      subType: 'blueberry',
+      name: 'Blueberry',
+      quantity: 1,
+    })
+
+    // Add second blueberry - should stack
+    addItem({
+      type: 'berry',
+      subType: 'blueberry',
+      name: 'Blueberry',
+      quantity: 1,
+    })
+
+    const state = useInventoryStore.getState()
+    expect(state.items).toHaveLength(1)
+    expect(state.items[0].quantity).toBe(2)
+  })
+
+  it('should not stack different berry types', () => {
+    const { addItem } = useInventoryStore.getState()
+
+    // Add blueberry
+    addItem({
+      type: 'berry',
+      subType: 'blueberry',
+      name: 'Blueberry',
+      quantity: 1,
+    })
+
+    // Add strawberry - should not stack
+    addItem({
+      type: 'berry',
+      subType: 'strawberry',
+      name: 'Strawberry',
+      quantity: 1,
+    })
+
+    const state = useInventoryStore.getState()
+    expect(state.items).toHaveLength(2)
+    expect(state.items[0].subType).toBe('blueberry')
+    expect(state.items[1].subType).toBe('strawberry')
   })
 
   it('should remove items from inventory', () => {

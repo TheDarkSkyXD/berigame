@@ -72,14 +72,14 @@ const Inventory = memo((props: InventoryProps) => {
                   {item && (
                     <>
                       <img
-                        src="/berry.svg"
+                        src={item.icon || "/berry.svg"}
                         alt={item.name}
                         style={{
                           width: "24px",
                           height: "24px"
                         }}
                       />
-                      {item.quantity > 1 && (
+                      {(item.quantity || 1) > 1 && (
                         <div style={{
                           position: "absolute",
                           bottom: "2px",
@@ -92,7 +92,7 @@ const Inventory = memo((props: InventoryProps) => {
                           minWidth: "12px",
                           textAlign: "center"
                         }}>
-                          {item.quantity}
+                          {item.quantity || 1}
                         </div>
                       )}
                     </>

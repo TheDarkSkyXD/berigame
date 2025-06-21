@@ -183,9 +183,12 @@ exports.handler = async function (event, context) {
             SK,
             created: timestamp,
             ttl: Math.floor(new Date().getTime() / 1000) + 360, // 6 mins from now?
-            health: 30,
-            berries: 0, // Initialize berry count
             health: MAX_HEALTH,
+            berries: 0, // Initialize total berry count
+            berries_blueberry: 0,
+            berries_strawberry: 0,
+            berries_greenberry: 0,
+            berries_goldberry: 0,
           },
         })
         .promise();
@@ -298,6 +301,7 @@ exports.handler = async function (event, context) {
     case "startHarvest":
       try {
         const treeId = bodyAsJSON.treeId;
+        const berryType = bodyAsJSON.berryType || 'blueberry';
         const harvestDuration = Math.floor(Math.random() * 8) + 3; // 3-10 seconds
 
         // Store harvest start time in database
@@ -308,6 +312,7 @@ exports.handler = async function (event, context) {
               PK: bodyAsJSON.chatRoomId,
               SK: `HARVEST#${treeId}#${connectionId}`,
               treeId,
+              berryType,
               playerId: connectionId,
               startTime: timestamp,
               duration: harvestDuration,
@@ -337,6 +342,7 @@ exports.handler = async function (event, context) {
                 Data: JSON.stringify({
                   harvestStarted: true,
                   treeId,
+                  berryType,
                   playerId: connectionId,
                   duration: harvestDuration,
                   timestamp: Date.now(),
@@ -363,6 +369,8 @@ exports.handler = async function (event, context) {
               .promise();
 
             if (harvestCheck.Item) {
+              const harvestBerryType = harvestCheck.Item.berryType || 'blueberry';
+
               // Remove harvest record
               await dynamodb
                 .delete({
@@ -374,7 +382,8 @@ exports.handler = async function (event, context) {
                 })
                 .promise();
 
-              // Add berry to player's inventory
+              // Add berry to player's inventory - update specific berry type counter
+              const berryField = `berries_${harvestBerryType}`;
               await dynamodb
                 .update({
                   TableName: DB,
@@ -382,7 +391,7 @@ exports.handler = async function (event, context) {
                     PK: bodyAsJSON.chatRoomId,
                     SK: "CONNECTION#" + connectionId,
                   },
-                  UpdateExpression: "ADD berries :val",
+                  UpdateExpression: `ADD ${berryField} :val, berries :val`,
                   ExpressionAttributeValues: {
                     ":val": 1,
                   },
@@ -400,6 +409,7 @@ exports.handler = async function (event, context) {
                       Data: JSON.stringify({
                         harvestCompleted: true,
                         treeId,
+                        berryType: harvestBerryType,
                         playerId: connectionId,
                         timestamp: Date.now(),
                       }),

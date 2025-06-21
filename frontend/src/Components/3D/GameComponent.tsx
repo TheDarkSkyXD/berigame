@@ -31,7 +31,10 @@ const GameComponent = () => {
         resize={{ scroll: true, debounce: { scroll: 50, resize: 0 } }}
       >
         <AlphaIsland />
-        <BerryTree position={[10, 0, 0]} treeId="tree_main" />
+        <BerryTree position={[10, 0, 0]} treeId="tree_main" berryType="blueberry" />
+        <BerryTree position={[15, 0, 5]} treeId="tree_strawberry" berryType="strawberry" />
+        <BerryTree position={[5, 0, 10]} treeId="tree_greenberry" berryType="greenberry" />
+        <BerryTree position={[-5, 0, 5]} treeId="tree_goldberry" berryType="goldberry" />
         <RenderNPC isCombatable={false} />
         <RenderOnlineUsers />
         <PlayerController

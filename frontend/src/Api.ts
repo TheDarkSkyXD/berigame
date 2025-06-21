@@ -98,10 +98,11 @@ export const connectToChatRoom = async (chatRoomId: string = "", ws: any) => {
   }
 }
 
-export const webSocketStartHarvest = async (treeId: string, ws: any) => {
+export const webSocketStartHarvest = async (treeId: string, ws: any, berryType?: string) => {
   try {
     const payload = {
       treeId,
+      berryType: berryType || 'blueberry',
       chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
       action: "startHarvest",
     }

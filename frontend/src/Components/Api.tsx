@@ -108,10 +108,20 @@ const Api = (props) => {
         completeHarvest(messageObject.treeId);
         if (messageObject.playerId === userConnectionId) {
           // Add berry to inventory for the harvesting player
+          const berryType = messageObject.berryType || 'blueberry';
+          const berryConfigs = {
+            blueberry: { name: 'Blueberry', icon: '/blueberry.svg' },
+            strawberry: { name: 'Strawberry', icon: '/strawberry.svg' },
+            greenberry: { name: 'Greenberry', icon: '/greenberry.svg' },
+            goldberry: { name: 'Goldberry', icon: '/goldberry.svg' },
+          };
+          const config = berryConfigs[berryType] || berryConfigs.blueberry;
+
           addItem({
             type: "berry",
-            name: "Berry",
-            icon: "/berry.svg",
+            subType: berryType,
+            name: config.name,
+            icon: config.icon,
             quantity: 1,
           });
         }

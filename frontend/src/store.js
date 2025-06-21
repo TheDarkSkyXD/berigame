@@ -105,15 +105,37 @@ export const useUserInputStore = create((set) => ({
 export const useInventoryStore = create((set) => ({
   items: [],
   addItem: (item) =>
-    set((state) => ({
-      items: [...state.items, { ...item, id: Date.now() + Math.random() }],
-    })),
+    set((state) => {
+      // Check if item already exists and can be stacked
+      const existingItemIndex = state.items.findIndex(
+        (existingItem) =>
+          existingItem.type === item.type &&
+          existingItem.subType === item.subType
+      );
+
+      if (existingItemIndex !== -1 && item.quantity) {
+        // Stack with existing item
+        const updatedItems = [...state.items];
+        updatedItems[existingItemIndex] = {
+          ...updatedItems[existingItemIndex],
+          quantity: (updatedItems[existingItemIndex].quantity || 1) + (item.quantity || 1)
+        };
+        return { items: updatedItems };
+      } else {
+        // Add as new item
+        return {
+          items: [...state.items, { ...item, id: Date.now() + Math.random() }],
+        };
+      }
+    }),
   removeItem: (itemId) =>
     set((state) => ({
       items: state.items.filter((item) => item.id !== itemId),
     })),
-  getItemCount: (itemType) => (state) =>
-    state.items.filter((item) => item.type === itemType).length,
+  getItemCount: (itemType, subType) => (state) =>
+    state.items
+      .filter((item) => item.type === itemType && (!subType || item.subType === subType))
+      .reduce((total, item) => total + (item.quantity || 1), 0),
 }));
 
 export const useHarvestStore = create((set, get) => ({
