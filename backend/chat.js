@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const helpers = require("./helpers");
 const { getRounds } = require("bcryptjs");
 const { validCallbackObject } = require("./helpers");
+const PositionValidator = require("./positionValidator");
 const apig = new AWS.ApiGatewayManagementApi({
   //Offline check for websocket issue with serverless offline
   //https://github.com/dherault/serverless-offline/issues/924
@@ -14,6 +15,7 @@ const apig = new AWS.ApiGatewayManagementApi({
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 
 const DB = process.env.DB;
+const positionValidator = new PositionValidator(DB);
 
 exports.handler = async function (event, context) {
   const {
@@ -189,6 +191,13 @@ exports.handler = async function (event, context) {
             berries_strawberry: 0,
             berries_greenberry: 0,
             berries_goldberry: 0,
+            // Position validation fields
+            lastValidPosition: SPAWN_LOCATION.position,
+            lastPositionUpdate: timestamp,
+            positionHistory: [{ position: SPAWN_LOCATION.position, timestamp }],
+            violationCount: 0,
+            lastViolationTime: 0,
+            updateCount: 0,
           },
         })
         .promise();
@@ -267,7 +276,47 @@ exports.handler = async function (event, context) {
 
     case "sendUpdate": //TODO: rename to send update
       try {
-        //Send message to socket connections
+        const currentTimestamp = Date.now();
+        const incomingPosition = bodyAsJSON.message.position;
+
+        // Validate position update
+        const validationResult = await positionValidator.validatePositionUpdate(
+          connectionId,
+          bodyAsJSON.chatRoomId,
+          incomingPosition,
+          currentTimestamp
+        );
+
+        // If position is invalid, send correction back to the client
+        if (!validationResult.valid) {
+          console.log(`Position validation failed for ${connectionId}: ${validationResult.reason}`);
+
+          // Send position correction to the offending client
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: connectionId,
+                Data: JSON.stringify({
+                  type: "positionCorrection",
+                  correctedPosition: validationResult.correctedPosition,
+                  reason: validationResult.reason,
+                  timestamp: currentTimestamp
+                }),
+              })
+              .promise();
+          } catch (e) {
+            console.log("Couldn't send position correction to " + connectionId, e);
+          }
+
+          // Don't broadcast invalid position to other players
+          return { statusCode: 200 };
+        }
+
+        // Use the validated/corrected position for broadcasting
+        bodyAsJSON.message.position = validationResult.correctedPosition;
+        bodyAsJSON.message.serverValidated = true;
+        bodyAsJSON.message.validationTimestamp = currentTimestamp;
+
         //TODO VERIFY CAN ATTACK (SECURITY)
         const attackingPlayer = bodyAsJSON.message.attackingPlayer;
         let damage = 0;
@@ -279,6 +328,8 @@ exports.handler = async function (event, context) {
           };
           dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
         }
+
+        // Broadcast validated position to other players
         for (const otherConnectionId of bodyAsJSON.connections) {
           bodyAsJSON.message.connectionId = connectionId;
           bodyAsJSON.message.userId = senderId;
@@ -294,7 +345,7 @@ exports.handler = async function (event, context) {
           }
         }
       } catch (e) {
-        console.error(e);
+        console.error("SendUpdate error:", e);
       }
       break;
 
