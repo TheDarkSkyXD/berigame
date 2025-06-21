@@ -211,3 +211,64 @@ export const useHarvestStore = create((set, get) => ({
     return treeState.isHarvestable || Date.now() > treeState.cooldownUntil;
   },
 }));
+
+export const useLoadingStore = create((set, get) => ({
+  isLoading: true,
+  loadingProgress: 0,
+  loadingMessage: "Initializing world...",
+  assetsToLoad: [
+    "native-woman.glb",
+    "tree.glb",
+    "giant.glb"
+  ],
+  loadedAssets: [],
+  startTime: Date.now(),
+
+  setLoading: (isLoading) => set({ isLoading }),
+
+  setLoadingMessage: (message) => set({ loadingMessage: message }),
+
+  addLoadedAsset: (assetUrl) => set((state) => {
+    // Avoid duplicate assets
+    if (state.loadedAssets.includes(assetUrl)) return state;
+
+    console.log(`Loading asset: ${assetUrl}`);
+    const newLoadedAssets = [...state.loadedAssets, assetUrl];
+    const progress = newLoadedAssets.length / state.assetsToLoad.length;
+
+    let message = "Loading world assets...";
+    if (progress >= 0.3) message = "Loading characters...";
+    if (progress >= 0.6) message = "Loading environment...";
+    if (progress >= 0.9) message = "Almost ready...";
+    if (progress >= 1) {
+      message = "Welcome to BeriGame!";
+      console.log("All assets loaded, hiding loading screen");
+
+      // Ensure minimum loading time of 2 seconds for better UX
+      const elapsedTime = Date.now() - get().startTime;
+      const minLoadingTime = 2000;
+      const remainingTime = Math.max(0, minLoadingTime - elapsedTime);
+
+      setTimeout(() => {
+        set({ isLoading: false });
+      }, remainingTime + 500); // Extra 500ms to show "Welcome" message
+    }
+
+    console.log(`Loading progress: ${Math.round(progress * 100)}% (${newLoadedAssets.length}/${state.assetsToLoad.length})`);
+
+    return {
+      loadedAssets: newLoadedAssets,
+      loadingProgress: Math.min(progress, 1),
+      loadingMessage: message,
+      isLoading: progress < 1
+    };
+  }),
+
+  resetLoading: () => set({
+    isLoading: true,
+    loadingProgress: 0,
+    loadingMessage: "Initializing world...",
+    loadedAssets: [],
+    startTime: Date.now()
+  })
+}));

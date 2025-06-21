@@ -296,3 +296,194 @@ canvas {
 .ui-element.modal button {
   background-color: rgb(48, 169, 0);
 }
+
+/* Loading Screen Styles */
+.loading-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  overflow: hidden;
+  transition: opacity 0.5s ease-out;
+}
+
+.loading-screen.fade-out {
+  opacity: 0;
+}
+
+.loading-content {
+  text-align: center;
+  color: white;
+  z-index: 2;
+  position: relative;
+  max-width: 500px;
+  padding: 20px;
+}
+
+.loading-logo {
+  margin-bottom: 40px;
+}
+
+.game-title {
+  font-size: 4rem;
+  font-weight: 800;
+  margin: 0;
+  background: linear-gradient(45deg, #fff, #a8d8ff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: 0 0 30px rgba(255, 255, 255, 0.3);
+  animation: titleGlow 2s ease-in-out infinite alternate;
+}
+
+.game-subtitle {
+  font-size: 1.2rem;
+  margin: 10px 0 0 0;
+  opacity: 0.8;
+  font-weight: 300;
+}
+
+.loading-progress {
+  margin: 30px 0;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4CAF50, #81C784);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+  box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+}
+
+.progress-text {
+  font-size: 1.1rem;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.loading-message {
+  font-size: 1.3rem;
+  margin: 20px 0;
+  min-height: 30px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+.loading-tips {
+  margin-top: 40px;
+  opacity: 0.7;
+}
+
+.loading-tips p {
+  margin: 8px 0;
+  font-size: 0.9rem;
+  animation: fadeInUp 0.6s ease forwards;
+}
+
+.loading-tips p:nth-child(1) { animation-delay: 0.2s; }
+.loading-tips p:nth-child(2) { animation-delay: 0.4s; }
+.loading-tips p:nth-child(3) { animation-delay: 0.6s; }
+
+.loading-background {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.floating-particle {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  animation: float 6s ease-in-out infinite;
+}
+
+.particle-1 {
+  width: 20px;
+  height: 20px;
+  top: 20%;
+  left: 10%;
+  animation-delay: 0s;
+}
+
+.particle-2 {
+  width: 15px;
+  height: 15px;
+  top: 60%;
+  left: 80%;
+  animation-delay: 1s;
+}
+
+.particle-3 {
+  width: 25px;
+  height: 25px;
+  top: 80%;
+  left: 20%;
+  animation-delay: 2s;
+}
+
+.particle-4 {
+  width: 12px;
+  height: 12px;
+  top: 30%;
+  left: 70%;
+  animation-delay: 3s;
+}
+
+.particle-5 {
+  width: 18px;
+  height: 18px;
+  top: 70%;
+  left: 60%;
+  animation-delay: 4s;
+}
+
+/* Animations */
+@keyframes titleGlow {
+  from {
+    text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+  }
+  to {
+    text-shadow: 0 0 40px rgba(255, 255, 255, 0.6);
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 0.7;
+    transform: translateY(0);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+    opacity: 0.1;
+  }
+  50% {
+    transform: translateY(-20px) rotate(180deg);
+    opacity: 0.3;
+  }
+}

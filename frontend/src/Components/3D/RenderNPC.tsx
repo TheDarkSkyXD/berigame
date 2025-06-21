@@ -2,7 +2,7 @@ import { useAnimations, useGLTF } from "@react-three/drei";
 import { useGraph } from "@react-three/fiber";
 import React, { Suspense, useEffect, useMemo, useState } from "react";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils";
-import { useChatStore } from "../../store";
+import { useChatStore, useLoadingStore } from "../../store";
 import RenderOtherUser from "./RenderOtherUser";
 
 const RenderNPC = (props) => {
@@ -11,6 +11,7 @@ const RenderNPC = (props) => {
   const [isWalking, setIsWalking] = useState(false);
   const [messageToRender, setMessageToRender] = useState("");
   const addChatMessage = useChatStore((state: any) => state.addChatMessage);
+  const { addLoadedAsset } = useLoadingStore();
 
   const isSameCoordinates = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -62,7 +63,9 @@ const RenderNPC = (props) => {
   useEffect(() => {
     walkRandom();
     setTimeout(talkRandom, 9000);
-  }, []);
+    // Mark NPC model as loaded
+    addLoadedAsset("giant.glb");
+  }, [addLoadedAsset]);
 
   return (
     <group>
