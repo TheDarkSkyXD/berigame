@@ -8,6 +8,7 @@ import {
   useUserInputStore,
   useUserStateStore,
   useWebsocketStore,
+  useLoadingStore,
 } from "../../store";
 import { webSocketSendUpdate } from "../../Api";
 import { RawShaderMaterial, Vector3, cloneUniformsGroups } from "three";
@@ -19,6 +20,7 @@ const PlayerController = (props) => {
   const objRef = useRef(null) as any;
   const { scene: obj, animations } = useGLTF("native-woman.glb") as any;
   const { actions, mixer } = useAnimations(animations, obj);
+  const { addLoadedAsset } = useLoadingStore();
   const [currentTween, setCurrentTween] = useState<any>(null);
   const [followingInterval, setFollowingInterval] = useState<any>(null);
   const websocketConnection = useWebsocketStore(
@@ -264,7 +266,9 @@ const PlayerController = (props) => {
 
   useEffect(() => {
     actions["Idle"]?.play();
-  }, [animations, mixer]);
+    // Mark player model as loaded
+    addLoadedAsset("native-woman.glb");
+  }, [animations, mixer, addLoadedAsset]);
 
   useEffect(() => {
     props.setPlayerRef(objRef);
