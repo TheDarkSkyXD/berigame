@@ -125,6 +125,42 @@ export const webSocketCompleteHarvest = async (treeId: string, ws: any) => {
   }
 }
 
+export const webSocketValidateInventory = async (ws: any) => {
+  try {
+    const payload = {
+      chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+      action: "validateInventory",
+    }
+    ws?.send(JSON.stringify(payload));
+  } catch (e) {
+    console.error("webSocketValidateInventory Error:", e);
+  }
+}
+
+export const webSocketRequestInventorySync = async (ws: any) => {
+  try {
+    const payload = {
+      chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+      action: "requestInventorySync",
+    }
+    ws?.send(JSON.stringify(payload));
+  } catch (e) {
+    console.error("webSocketRequestInventorySync Error:", e);
+  }
+}
+
+export const webSocketValidateGameState = async (ws: any) => {
+  try {
+    const payload = {
+      chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+      action: "validateGameState",
+    }
+    ws?.send(JSON.stringify(payload));
+  } catch (e) {
+    console.error("webSocketValidateGameState Error:", e);
+  }
+}
+
 export const deleteUserPosition = (userId: string) => {
   delete connectedUsers[userId];
 }

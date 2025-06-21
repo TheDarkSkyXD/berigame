@@ -41,10 +41,21 @@ const BerryTree = (props) => {
       const progress = getHarvestProgress(useHarvestStore.getState());
       setHarvestProgress(progress);
       updateTreeCooldown(treeId);
+
+      // Check if harvest is complete and send completion message
+      if (progress && progress.isComplete && websocketConnection) {
+        // Send completion message to backend
+        const payload = {
+          treeId,
+          chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+          action: "completeHarvest",
+        };
+        websocketConnection.send(JSON.stringify(payload));
+      }
     }, 100);
 
     return () => clearInterval(interval);
-  }, [treeId, getHarvestProgress, updateTreeCooldown]);
+  }, [treeId, getHarvestProgress, updateTreeCooldown, websocketConnection]);
 
   const startHarvest = () => {
     if (!isTreeHarvestable || !websocketConnection) return;

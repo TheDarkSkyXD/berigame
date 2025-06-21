@@ -43,12 +43,18 @@ const Api = (props) => {
   const completeHarvest = useHarvestStore(
     (state: any) => state.completeHarvest
   );
+  const cancelHarvest = useHarvestStore((state: any) => state.cancelHarvest);
   const addItem = useInventoryStore((state: any) => state.addItem);
+  const removeItem = useInventoryStore((state: any) => state.removeItem);
+  const clearInventory = useInventoryStore((state: any) => state.clearInventory);
+  const shouldValidate = useInventoryStore((state: any) => state.shouldValidate);
+  const markValidated = useInventoryStore((state: any) => state.markValidated);
   const setIsDead = useUserStateStore((state: any) => state.setIsDead);
   const setIsRespawning = useUserStateStore(
     (state: any) => state.setIsRespawning
   );
   const setHealth = useUserStateStore((state: any) => state.setHealth);
+  const setPositionCorrection = useUserStateStore((state: any) => state.setPositionCorrection);
 
   // if (process.env.NODE_ENV === "development") {
   //   url = "http://localhost:3000/dev/";
@@ -69,6 +75,26 @@ const Api = (props) => {
     }
   };
 
+  const handlePositionCorrection = (correctionData: any) => {
+    console.log("Server corrected position:", correctionData);
+
+    // Store the correction data for the PlayerController to handle
+    setPositionCorrection({
+      correctedPosition: correctionData.correctedPosition,
+      reason: correctionData.reason,
+      timestamp: correctionData.timestamp
+    });
+
+    // Show user feedback (optional - could be removed to not reveal anti-cheat)
+    if (correctionData.reason === "boundary_violation") {
+      console.warn("Movement was outside game boundaries");
+    } else if (correctionData.reason === "speed_violation") {
+      console.warn("Movement was too fast");
+    } else if (correctionData.reason === "teleportation_detected") {
+      console.warn("Invalid movement detected");
+    }
+  };
+
   const updateConnections = (connections: any) => {
     const tempAllConnections = [];
     for (const item of connections) {
@@ -83,6 +109,13 @@ const Api = (props) => {
 
       if (messageObject.chatMessage) {
         addChatMessage(messageObject);
+      }
+
+      // Handle position corrections from server
+      if (messageObject.type === "positionCorrection") {
+        console.warn("Position corrected by server:", messageObject.reason);
+        handlePositionCorrection(messageObject);
+        return;
       }
 
       if (messageObject.position && messageObject.userId) {
@@ -127,6 +160,116 @@ const Api = (props) => {
         }
       }
 
+      // Handle inventory synchronization from backend
+      if (messageObject.inventorySync || messageObject.inventoryValidation) {
+        const inventory = messageObject.inventory;
+        const berryConfigs = {
+          blueberry: { name: 'Blueberry', icon: '/blueberry.svg' },
+          strawberry: { name: 'Strawberry', icon: '/strawberry.svg' },
+          greenberry: { name: 'Greenberry', icon: '/greenberry.svg' },
+          goldberry: { name: 'Goldberry', icon: '/goldberry.svg' },
+        };
+
+        // Clear existing inventory and sync with backend state
+        const { items } = useInventoryStore.getState();
+        items.forEach(item => {
+          if (item.id) {
+            removeItem(item.id);
+          }
+        });
+
+        // Add berries from backend inventory
+        Object.keys(berryConfigs).forEach(berryType => {
+          const count = inventory[`berries_${berryType}`] || 0;
+          if (count > 0) {
+            const config = berryConfigs[berryType];
+            addItem({
+              type: "berry",
+              subType: berryType,
+              name: config.name,
+              icon: config.icon,
+              quantity: count,
+            });
+          }
+        });
+
+        const messageType = messageObject.inventoryValidation ? 'validated' : 'synchronized';
+        console.log(`Inventory ${messageType} with backend:`, inventory);
+
+        // Mark inventory as validated
+        markValidated();
+      }
+
+      // Handle harvest cancellation
+      if (messageObject.harvestCancelled) {
+        cancelHarvest(messageObject.treeId);
+        console.log(`Harvest cancelled for tree ${messageObject.treeId} by player ${messageObject.playerId}`);
+      }
+
+      // Handle comprehensive game state validation
+      if (messageObject.gameStateValidation) {
+        const gameState = messageObject.gameState;
+        console.log('Received game state validation:', gameState);
+
+        // Sync inventory
+        const berryConfigs = {
+          blueberry: { name: 'Blueberry', icon: '/blueberry.svg' },
+          strawberry: { name: 'Strawberry', icon: '/strawberry.svg' },
+          greenberry: { name: 'Greenberry', icon: '/greenberry.svg' },
+          goldberry: { name: 'Goldberry', icon: '/goldberry.svg' },
+        };
+
+        // Clear and rebuild inventory
+        clearInventory();
+        Object.keys(berryConfigs).forEach(berryType => {
+          const count = gameState.inventory[`berries_${berryType}`] || 0;
+          if (count > 0) {
+            const config = berryConfigs[berryType];
+            addItem({
+              type: "berry",
+              subType: berryType,
+              name: config.name,
+              icon: config.icon,
+              quantity: count,
+            });
+          }
+        });
+
+        // Sync harvest states
+        const { activeHarvests, cancelHarvest, startHarvest } = useHarvestStore.getState();
+
+        // Cancel harvests that don't exist on server
+        Object.keys(activeHarvests).forEach(treeId => {
+          const serverHasHarvest = gameState.activeHarvests.some(h => h.treeId === treeId);
+          if (!serverHasHarvest) {
+            console.log(`Cancelling client-side harvest for tree ${treeId} - not found on server`);
+            cancelHarvest(treeId);
+          }
+        });
+
+        // Start harvests that exist on server but not client
+        gameState.activeHarvests.forEach(serverHarvest => {
+          if (!activeHarvests[serverHarvest.treeId]) {
+            const elapsedTime = Date.now() - serverHarvest.startTime;
+            const remainingTime = Math.max(0, serverHarvest.duration - elapsedTime / 1000);
+            if (remainingTime > 0) {
+              console.log(`Starting client-side harvest for tree ${serverHarvest.treeId} - found on server`);
+              startHarvest(serverHarvest.treeId, serverHarvest.playerId, remainingTime);
+            }
+          }
+        });
+
+        // Update health if different
+        const currentHealth = useUserStateStore.getState().health;
+        if (currentHealth !== gameState.health) {
+          console.log(`Syncing health: ${currentHealth} -> ${gameState.health}`);
+          setHealth(gameState.health);
+        }
+
+        markValidated();
+        console.log('Game state synchronized with backend');
+      }
+
       // Handle death event
       if (messageObject.type === "playerDeath") {
         console.log("Player death event received:", messageObject);
@@ -168,6 +311,15 @@ const Api = (props) => {
       target: e.target,
       timeStamp: e.timeStamp
     });
+
+    // Clear inventory on connection error to prevent stale state
+    clearInventory();
+
+    // Cancel any active harvests on error
+    const { activeHarvests, cancelHarvest } = useHarvestStore.getState();
+    Object.keys(activeHarvests).forEach(treeId => {
+      cancelHarvest(treeId);
+    });
   };
 
   const _webSocketClose = (e: CloseEvent) => {
@@ -190,6 +342,17 @@ const Api = (props) => {
     // Connect to chat room once connection is established
     setTimeout(() => {
       connectToChatRoom("", websocketConnection);
+
+      // Request inventory sync after reconnection
+      setTimeout(() => {
+        if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
+          const payload = {
+            chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+            action: "requestInventorySync",
+          };
+          websocketConnection.send(JSON.stringify(payload));
+        }
+      }, 2000);
     }, 1000);
   };
 
@@ -213,6 +376,21 @@ const Api = (props) => {
   useEffect(() => {
     initializeWebSocket();
   }, []);
+
+  // Periodic game state validation
+  useEffect(() => {
+    const validationInterval = setInterval(() => {
+      if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN && shouldValidate()) {
+        const payload = {
+          chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+          action: "validateGameState",
+        };
+        websocketConnection.send(JSON.stringify(payload));
+      }
+    }, 30000); // Check every 30 seconds
+
+    return () => clearInterval(validationInterval);
+  }, [websocketConnection, shouldValidate]);
 
   return <div> </div>;
 };

@@ -84,6 +84,7 @@ export const useUserStateStore = create((set) => ({
   isRespawning: false,
   health: 30,
   maxHealth: 30,
+  positionCorrection: null,
   setUserConnectionId: (id) => set({ userConnectionId: id }),
   setUserFollowing: (newObject) => set({ userFollowing: newObject }),
   setUserAttacking: (newObject) => set({ userAttacking: newObject }),
@@ -91,6 +92,8 @@ export const useUserStateStore = create((set) => ({
   setIsRespawning: (isRespawning) => set({ isRespawning }),
   setHealth: (health) => set({ health }),
   setMaxHealth: (maxHealth) => set({ maxHealth }),
+  setPositionCorrection: (correction) => set({ positionCorrection: correction }),
+  clearPositionCorrection: () => set({ positionCorrection: null }),
 }));
 
 export const useUserInputStore = create((set) => ({
@@ -102,8 +105,10 @@ export const useUserInputStore = create((set) => ({
     set({ clickedOtherObject: newObject, clickedPointOnLand: null }),
 }));
 
-export const useInventoryStore = create((set) => ({
+export const useInventoryStore = create((set, get) => ({
   items: [],
+  lastValidationTime: 0,
+  validationInterval: 30000, // 30 seconds
   addItem: (item) =>
     set((state) => {
       // Check if item already exists and can be stacked
@@ -132,28 +137,60 @@ export const useInventoryStore = create((set) => ({
     set((state) => ({
       items: state.items.filter((item) => item.id !== itemId),
     })),
+  clearInventory: () =>
+    set(() => ({
+      items: [],
+    })),
   getItemCount: (itemType, subType) => (state) =>
     state.items
       .filter((item) => item.type === itemType && (!subType || item.subType === subType))
       .reduce((total, item) => total + (item.quantity || 1), 0),
+  shouldValidate: () => {
+    const state = get();
+    return Date.now() - state.lastValidationTime > state.validationInterval;
+  },
+  markValidated: () =>
+    set(() => ({
+      lastValidationTime: Date.now(),
+    })),
 }));
 
 export const useHarvestStore = create((set, get) => ({
-  activeHarvests: {}, // treeId -> { startTime, duration, playerId }
+  activeHarvests: {}, // treeId -> { startTime, duration, playerId, timeoutId }
   treeStates: {}, // treeId -> { lastHarvested, cooldownUntil, isHarvestable }
   startHarvest: (treeId, playerId, duration) =>
-    set((state) => ({
-      activeHarvests: {
-        ...state.activeHarvests,
-        [treeId]: {
-          startTime: Date.now(),
-          duration: duration * 1000, // convert to milliseconds
-          playerId,
+    set((state) => {
+      // Clear any existing timeout for this tree
+      const existingHarvest = state.activeHarvests[treeId];
+      if (existingHarvest && existingHarvest.timeoutId) {
+        clearTimeout(existingHarvest.timeoutId);
+      }
+
+      // Set up timeout to auto-cancel harvest if it takes too long
+      const timeoutId = setTimeout(() => {
+        console.warn(`Harvest timeout for tree ${treeId}, auto-cancelling`);
+        get().cancelHarvest(treeId);
+      }, (duration + 5) * 1000); // 5 second grace period
+
+      return {
+        activeHarvests: {
+          ...state.activeHarvests,
+          [treeId]: {
+            startTime: Date.now(),
+            duration: duration * 1000, // convert to milliseconds
+            playerId,
+            timeoutId,
+          },
         },
-      },
-    })),
+      };
+    }),
   completeHarvest: (treeId) =>
     set((state) => {
+      const harvest = state.activeHarvests[treeId];
+      if (harvest && harvest.timeoutId) {
+        clearTimeout(harvest.timeoutId);
+      }
+
       const newActiveHarvests = { ...state.activeHarvests };
       delete newActiveHarvests[treeId];
       return {
@@ -170,6 +207,11 @@ export const useHarvestStore = create((set, get) => ({
     }),
   cancelHarvest: (treeId) =>
     set((state) => {
+      const harvest = state.activeHarvests[treeId];
+      if (harvest && harvest.timeoutId) {
+        clearTimeout(harvest.timeoutId);
+      }
+
       const newActiveHarvests = { ...state.activeHarvests };
       delete newActiveHarvests[treeId];
       return { activeHarvests: newActiveHarvests };
