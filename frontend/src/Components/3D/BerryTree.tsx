@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from "react";
-import { useUserInputStore, useUserStateStore, useHarvestStore, useWebsocketStore } from "../../store";
+import { useUserInputStore, useUserStateStore, useHarvestStore, useWebsocketStore, useLoadingStore } from "../../store";
 import { webSocketStartHarvest } from "../../Api";
 import RenderGLB from "./RenderGLB";
 import { Html } from "@react-three/drei";
@@ -7,6 +7,7 @@ import { Html } from "@react-three/drei";
 const BerryTree = (props) => {
   const objRef = useRef(null);
   const treeId = props.treeId || `tree_${props.position?.join('_') || 'default'}`;
+  const { addLoadedAsset } = useLoadingStore();
 
   const setClickedOtherObject = useUserInputStore(
     (state) => state.setClickedOtherObject
@@ -66,6 +67,11 @@ const BerryTree = (props) => {
       ],
     });
   };
+
+  // Mark tree model as loaded when component mounts
+  useEffect(() => {
+    addLoadedAsset("tree.glb");
+  }, [addLoadedAsset]);
 
   return (
     <group>
