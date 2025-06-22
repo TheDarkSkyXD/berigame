@@ -89,6 +89,7 @@ export const useUserStateStore = create((set) => ({
   isRespawning: false,
   health: 30,
   maxHealth: 30,
+  position: { x: 0, y: 0, z: 0 }, // Add position tracking
   positionCorrection: null,
   setUserConnectionId: (id) => set({ userConnectionId: id }),
   setUserFollowing: (newObject) => set({ userFollowing: newObject }),
@@ -97,6 +98,7 @@ export const useUserStateStore = create((set) => ({
   setIsRespawning: (isRespawning) => set({ isRespawning }),
   setHealth: (health) => set({ health }),
   setMaxHealth: (maxHealth) => set({ maxHealth }),
+  setPosition: (position) => set({ position }), // Add position setter
   setPositionCorrection: (correction) => set({ positionCorrection: correction }),
   clearPositionCorrection: () => set({ positionCorrection: null }),
 }));
@@ -325,10 +327,92 @@ export const useLoadingStore = create((set, get) => ({
   ],
   loadedAssets: [],
   startTime: Date.now(),
+  // New state for tracking game data loading
+  gameDataLoaded: false,
+  websocketConnected: false,
 
   setLoading: (isLoading) => set({ isLoading }),
 
   setLoadingMessage: (message) => set({ loadingMessage: message }),
+
+  setWebsocketConnected: (connected) => set((state) => {
+    console.log(`WebSocket connection status: ${connected}`);
+
+    // Calculate new progress
+    const assetProgress = state.loadedAssets.length / state.assetsToLoad.length;
+    let totalProgress = assetProgress * 0.6; // Assets are 60% of total progress
+
+    if (connected) {
+      totalProgress += 0.2; // WebSocket connection is 20% of total progress
+      if (state.gameDataLoaded) {
+        totalProgress += 0.2; // Game data loading is 20% of total progress
+      }
+    }
+
+    const newState = {
+      websocketConnected: connected,
+      loadingProgress: Math.min(totalProgress, 1),
+      loadingMessage: connected ?
+        (state.gameDataLoaded ? "Loading complete!" : "Loading game data...") :
+        "Connecting to server..."
+    };
+
+    // Check if we can complete loading
+    if (connected && state.gameDataLoaded && state.loadedAssets.length === state.assetsToLoad.length) {
+      get().completeLoading();
+    }
+
+    return newState;
+  }),
+
+  setGameDataLoaded: (loaded) => set((state) => {
+    console.log(`Game data loaded status: ${loaded}`);
+
+    // Calculate new progress
+    const assetProgress = state.loadedAssets.length / state.assetsToLoad.length;
+    let totalProgress = assetProgress * 0.6; // Assets are 60% of total progress
+
+    if (state.websocketConnected) {
+      totalProgress += 0.2; // WebSocket connection is 20% of total progress
+      if (loaded) {
+        totalProgress += 0.2; // Game data loading is 20% of total progress
+      }
+    }
+
+    const newState = {
+      gameDataLoaded: loaded,
+      loadingProgress: Math.min(totalProgress, 1),
+      loadingMessage: loaded ? "Loading complete!" : "Loading game data..."
+    };
+
+    // Check if we can complete loading
+    if (loaded && state.websocketConnected && state.loadedAssets.length === state.assetsToLoad.length) {
+      get().completeLoading();
+    }
+
+    return newState;
+  }),
+
+  completeLoading: () => {
+    const state = get();
+    if (state.isLoading) {
+      console.log("All loading requirements met, completing loading process");
+
+      // Ensure minimum loading time of 2 seconds for better UX
+      const elapsedTime = Date.now() - state.startTime;
+      const minLoadingTime = 2000;
+      const remainingTime = Math.max(0, minLoadingTime - elapsedTime);
+
+      set({
+        loadingMessage: "Welcome to BeriGame!",
+        loadingProgress: 1
+      });
+
+      setTimeout(() => {
+        set({ isLoading: false });
+      }, remainingTime + 500); // Extra 500ms to show "Welcome" message
+    }
+  },
 
   addLoadedAsset: (assetUrl) => set((state) => {
     // Avoid duplicate assets
@@ -336,33 +420,34 @@ export const useLoadingStore = create((set, get) => ({
 
     console.log(`Loading asset: ${assetUrl}`);
     const newLoadedAssets = [...state.loadedAssets, assetUrl];
-    const progress = newLoadedAssets.length / state.assetsToLoad.length;
+    const assetProgress = newLoadedAssets.length / state.assetsToLoad.length;
 
     let message = "Loading world assets...";
-    if (progress >= 0.3) message = "Loading characters...";
-    if (progress >= 0.6) message = "Loading environment...";
-    if (progress >= 0.9) message = "Almost ready...";
-    if (progress >= 1) {
-      message = "Welcome to BeriGame!";
-      console.log("All assets loaded, hiding loading screen");
+    if (assetProgress >= 0.3) message = "Loading characters...";
+    if (assetProgress >= 0.6) message = "Loading environment...";
+    if (assetProgress >= 0.9) message = "Connecting to server...";
 
-      // Ensure minimum loading time of 2 seconds for better UX
-      const elapsedTime = Date.now() - get().startTime;
-      const minLoadingTime = 2000;
-      const remainingTime = Math.max(0, minLoadingTime - elapsedTime);
-
-      setTimeout(() => {
-        set({ isLoading: false });
-      }, remainingTime + 500); // Extra 500ms to show "Welcome" message
+    // Calculate total progress including WebSocket and game data
+    let totalProgress = assetProgress * 0.6; // Assets are 60% of total progress
+    if (state.websocketConnected) {
+      totalProgress += 0.2; // WebSocket connection is 20% of total progress
+      if (state.gameDataLoaded) {
+        totalProgress += 0.2; // Game data loading is 20% of total progress
+      }
     }
 
-    console.log(`Loading progress: ${Math.round(progress * 100)}% (${newLoadedAssets.length}/${state.assetsToLoad.length})`);
+    console.log(`Asset loading progress: ${Math.round(assetProgress * 100)}% (${newLoadedAssets.length}/${state.assetsToLoad.length})`);
+    console.log(`Total loading progress: ${Math.round(totalProgress * 100)}%`);
+
+    // Check if we can complete loading (all assets + websocket + game data)
+    if (assetProgress >= 1 && state.websocketConnected && state.gameDataLoaded) {
+      get().completeLoading();
+    }
 
     return {
       loadedAssets: newLoadedAssets,
-      loadingProgress: Math.min(progress, 1),
+      loadingProgress: Math.min(totalProgress, 1),
       loadingMessage: message,
-      isLoading: progress < 1
     };
   }),
 
@@ -371,30 +456,85 @@ export const useLoadingStore = create((set, get) => ({
     loadingProgress: 0,
     loadingMessage: "Initializing world...",
     loadedAssets: [],
-    startTime: Date.now()
+    startTime: Date.now(),
+    gameDataLoaded: false,
+    websocketConnected: false
   })
 }));
 
 export const useGroundItemsStore = create((set, get) => ({
   groundItems: [],
+  pendingPickups: new Set(), // Track items being picked up to prevent sync conflicts
 
   addGroundItem: (groundItem) =>
     set((state) => ({
       groundItems: [...state.groundItems, groundItem],
     })),
 
+  // Add ground item and remove any temporary items at the same position
+  addGroundItemAndCleanup: (groundItem) =>
+    set((state) => {
+      // Remove any temporary items at the same position with same item type
+      const filteredItems = state.groundItems.filter((item) => {
+        if (!item.isTemporary) return true;
+
+        // Check if it's the same type and at the same position (within small tolerance)
+        const sameType = item.itemType === groundItem.itemType && item.itemSubType === groundItem.itemSubType;
+        const samePosition = Math.abs(item.position.x - groundItem.position.x) < 0.1 &&
+                           Math.abs(item.position.y - groundItem.position.y) < 0.1 &&
+                           Math.abs(item.position.z - groundItem.position.z) < 0.1;
+
+        // Remove temporary item if it matches
+        return !(sameType && samePosition);
+      });
+
+      return {
+        groundItems: [...filteredItems, groundItem],
+      };
+    }),
+
   removeGroundItem: (groundItemId) =>
     set((state) => ({
       groundItems: state.groundItems.filter((item) => item.id !== groundItemId),
     })),
 
+  // Mark item as being picked up (optimistic)
+  markItemBeingPickedUp: (groundItemId) =>
+    set((state) => {
+      const newPendingPickups = new Set(state.pendingPickups);
+      newPendingPickups.add(groundItemId);
+      return {
+        pendingPickups: newPendingPickups,
+        groundItems: state.groundItems.filter((item) => item.id !== groundItemId),
+      };
+    }),
+
+  // Confirm pickup completed (remove from pending)
+  confirmPickupCompleted: (groundItemId) =>
+    set((state) => {
+      const newPendingPickups = new Set(state.pendingPickups);
+      newPendingPickups.delete(groundItemId);
+      return {
+        pendingPickups: newPendingPickups,
+      };
+    }),
+
   clearGroundItems: () =>
     set(() => ({
       groundItems: [],
+      pendingPickups: new Set(),
     })),
 
+  // Smart sync that respects pending operations
   syncGroundItems: (groundItems) =>
-    set(() => ({
-      groundItems: groundItems,
-    })),
+    set((state) => {
+      // Filter out items that are currently being picked up
+      const filteredGroundItems = groundItems.filter(
+        (item) => !state.pendingPickups.has(item.id)
+      );
+
+      return {
+        groundItems: filteredGroundItems,
+      };
+    }),
 }));

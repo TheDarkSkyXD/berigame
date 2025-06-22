@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useInventoryStore } from '../store';
+import { useInventoryStore, useGroundItemsStore } from '../store';
 
 describe('Inventory Store Drag and Drop', () => {
   let store;
@@ -153,5 +153,190 @@ describe('Inventory Store Drag and Drop', () => {
     const strawberryCount = store.getItemCount('berry', 'strawberry')(state);
     expect(blueberryCount).toBe(0); // Blueberry was removed
     expect(strawberryCount).toBe(2); // Strawberry should remain
+  });
+});
+
+describe('Ground Items Store', () => {
+  let groundStore;
+
+  beforeEach(() => {
+    groundStore = useGroundItemsStore.getState();
+    groundStore.clearGroundItems();
+  });
+
+  it('should add ground items correctly', () => {
+    const groundItem = {
+      id: 'test-item-1',
+      itemType: 'berry',
+      itemSubType: 'blueberry',
+      quantity: 1,
+      position: { x: 0, y: 0, z: 0 },
+      droppedBy: 'player1',
+      droppedAt: Date.now(),
+    };
+
+    groundStore.addGroundItem(groundItem);
+
+    const state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(1);
+    expect(state.groundItems[0]).toEqual(groundItem);
+  });
+
+  it('should remove temporary items when adding real ones at same position', () => {
+    const tempItem = {
+      id: 'temp-item-1',
+      itemType: 'berry',
+      itemSubType: 'blueberry',
+      quantity: 1,
+      position: { x: 5, y: 0, z: 5 },
+      droppedBy: 'local',
+      droppedAt: Date.now(),
+      isTemporary: true,
+    };
+
+    const realItem = {
+      id: 'real-item-1',
+      itemType: 'berry',
+      itemSubType: 'blueberry',
+      quantity: 1,
+      position: { x: 5, y: 0, z: 5 },
+      droppedBy: 'player1',
+      droppedAt: Date.now(),
+    };
+
+    // Add temporary item first
+    groundStore.addGroundItem(tempItem);
+    let state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(1);
+    expect(state.groundItems[0].isTemporary).toBe(true);
+
+    // Add real item - should replace temporary
+    groundStore.addGroundItemAndCleanup(realItem);
+    state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(1);
+    expect(state.groundItems[0].id).toBe('real-item-1');
+    expect(state.groundItems[0].isTemporary).toBeUndefined();
+  });
+
+  it('should keep temporary items at different positions', () => {
+    const tempItem1 = {
+      id: 'temp-item-1',
+      itemType: 'berry',
+      itemSubType: 'blueberry',
+      quantity: 1,
+      position: { x: 5, y: 0, z: 5 },
+      droppedBy: 'local',
+      droppedAt: Date.now(),
+      isTemporary: true,
+    };
+
+    const realItem = {
+      id: 'real-item-1',
+      itemType: 'berry',
+      itemSubType: 'blueberry',
+      quantity: 1,
+      position: { x: 10, y: 0, z: 10 }, // Different position
+      droppedBy: 'player1',
+      droppedAt: Date.now(),
+    };
+
+    // Add temporary item first
+    groundStore.addGroundItem(tempItem1);
+
+    // Add real item at different position
+    groundStore.addGroundItemAndCleanup(realItem);
+
+    const state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(2);
+  });
+
+  it('should handle pickup simulation correctly', () => {
+    const groundItem = {
+      id: 'ground-item-1',
+      itemType: 'berry',
+      itemSubType: 'blueberry',
+      quantity: 3,
+      position: { x: 0, y: 0, z: 0 },
+      droppedBy: 'player1',
+      droppedAt: Date.now(),
+    };
+
+    // Add ground item
+    groundStore.addGroundItem(groundItem);
+    let state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(1);
+
+    // Simulate pickup by removing ground item
+    groundStore.removeGroundItem('ground-item-1');
+    state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(0);
+  });
+
+  it('should handle pending pickups correctly', () => {
+    const groundItem = {
+      id: 'ground-item-1',
+      itemType: 'berry',
+      itemSubType: 'blueberry',
+      quantity: 3,
+      position: { x: 0, y: 0, z: 0 },
+      droppedBy: 'player1',
+      droppedAt: Date.now(),
+    };
+
+    // Add ground item
+    groundStore.addGroundItem(groundItem);
+    let state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(1);
+    expect(state.pendingPickups.size).toBe(0);
+
+    // Mark item as being picked up
+    groundStore.markItemBeingPickedUp('ground-item-1');
+    state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(0); // Item removed from ground
+    expect(state.pendingPickups.has('ground-item-1')).toBe(true); // Item in pending
+
+    // Confirm pickup completed
+    groundStore.confirmPickupCompleted('ground-item-1');
+    state = useGroundItemsStore.getState();
+    expect(state.pendingPickups.has('ground-item-1')).toBe(false); // Item no longer pending
+  });
+
+  it('should prevent sync conflicts with pending pickups', () => {
+    const groundItem1 = {
+      id: 'ground-item-1',
+      itemType: 'berry',
+      itemSubType: 'blueberry',
+      quantity: 1,
+      position: { x: 0, y: 0, z: 0 },
+      droppedBy: 'player1',
+      droppedAt: Date.now(),
+    };
+
+    const groundItem2 = {
+      id: 'ground-item-2',
+      itemType: 'berry',
+      itemSubType: 'strawberry',
+      quantity: 1,
+      position: { x: 5, y: 0, z: 5 },
+      droppedBy: 'player2',
+      droppedAt: Date.now(),
+    };
+
+    // Add both items
+    groundStore.addGroundItem(groundItem1);
+    groundStore.addGroundItem(groundItem2);
+
+    // Mark first item as being picked up
+    groundStore.markItemBeingPickedUp('ground-item-1');
+
+    // Simulate server sync that includes both items (before pickup was processed)
+    const serverGroundItems = [groundItem1, groundItem2];
+    groundStore.syncGroundItems(serverGroundItems);
+
+    const state = useGroundItemsStore.getState();
+    // Should only have item 2 (item 1 is filtered out due to pending pickup)
+    expect(state.groundItems).toHaveLength(1);
+    expect(state.groundItems[0].id).toBe('ground-item-2');
+    expect(state.pendingPickups.has('ground-item-1')).toBe(true);
   });
 });

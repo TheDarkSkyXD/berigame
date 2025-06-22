@@ -7,6 +7,7 @@ import {
   useHarvestStore,
   useInventoryStore,
   useGroundItemsStore,
+  useLoadingStore,
 } from "../store";
 import { connectToChatRoom } from "../Api";
 
@@ -57,9 +58,13 @@ const Api = (props) => {
   const setHealth = useUserStateStore((state: any) => state.setHealth);
   const setPositionCorrection = useUserStateStore((state: any) => state.setPositionCorrection);
   const addGroundItem = useGroundItemsStore((state: any) => state.addGroundItem);
+  const addGroundItemAndCleanup = useGroundItemsStore((state: any) => state.addGroundItemAndCleanup);
   const removeGroundItem = useGroundItemsStore((state: any) => state.removeGroundItem);
+  const confirmPickupCompleted = useGroundItemsStore((state: any) => state.confirmPickupCompleted);
   const clearGroundItems = useGroundItemsStore((state: any) => state.clearGroundItems);
   const syncGroundItems = useGroundItemsStore((state: any) => state.syncGroundItems);
+  const setWebsocketConnected = useLoadingStore((state: any) => state.setWebsocketConnected);
+  const setGameDataLoaded = useLoadingStore((state: any) => state.setGameDataLoaded);
 
   if (process.env.NODE_ENV === "development") {
     url = "http://localhost:3000/dev/";
@@ -370,6 +375,10 @@ const Api = (props) => {
         }
 
         markValidated();
+
+        // Notify loading store that game data is loaded
+        setGameDataLoaded(true);
+
         console.log('Game state synchronized with backend');
       }
 
@@ -439,11 +448,32 @@ const Api = (props) => {
       }
       // Handle ground item events
       if (messageObject.type === "groundItemCreated") {
-        addGroundItem(messageObject.groundItem);
+        addGroundItemAndCleanup(messageObject.groundItem);
       }
 
       if (messageObject.type === "groundItemRemoved") {
+        // Always remove the ground item from the list
         removeGroundItem(messageObject.groundItemId);
+
+        // If this player picked up the item, confirm the pickup and sync inventory
+        if (messageObject.pickedUpBy === userConnectionId) {
+          console.log(`Pickup confirmed for item ${messageObject.groundItemId}, syncing inventory`);
+
+          // Confirm pickup completed (removes from pending list)
+          confirmPickupCompleted(messageObject.groundItemId);
+
+          // Request inventory sync to update local inventory
+          if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
+            const payload = {
+              chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+              action: "requestInventorySync",
+            };
+            websocketConnection.send(JSON.stringify(payload));
+          }
+        } else {
+          // For other players' pickups, just confirm completion to clean up any pending state
+          confirmPickupCompleted(messageObject.groundItemId);
+        }
       }
     }
   };
@@ -456,6 +486,10 @@ const Api = (props) => {
       target: e.target,
       timeStamp: e.timeStamp
     });
+
+    // Notify loading store that websocket is disconnected
+    setWebsocketConnected(false);
+    setGameDataLoaded(false);
 
     // Clear inventory on connection error to prevent stale state
     clearInventory();
@@ -478,6 +512,10 @@ const Api = (props) => {
       wasClean: e.wasClean
     });
 
+    // Notify loading store that websocket is disconnected
+    setWebsocketConnected(false);
+    setGameDataLoaded(false);
+
     // Attempt to reconnect after 3 seconds
     setTimeout(() => {
       console.log("Attempting to reconnect WebSocket...");
@@ -487,20 +525,32 @@ const Api = (props) => {
 
   const _webSocketOpen = (e: Event) => {
     console.log("WebSocket connected successfully:", e);
+
+    // Notify loading store that websocket is connected
+    setWebsocketConnected(true);
+
     // Connect to chat room once connection is established
     setTimeout(() => {
       connectToChatRoom("", websocketConnection);
 
-      // Request inventory sync after reconnection
+      // Immediately request game state validation for faster loading
       setTimeout(() => {
         if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
-          const payload = {
+          console.log("🚀 Requesting immediate game state validation for faster loading");
+          const gameStatePayload = {
+            chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+            action: "validateGameState",
+          };
+          websocketConnection.send(JSON.stringify(gameStatePayload));
+
+          // Also request inventory sync
+          const inventoryPayload = {
             chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
             action: "requestInventorySync",
           };
-          websocketConnection.send(JSON.stringify(payload));
+          websocketConnection.send(JSON.stringify(inventoryPayload));
         }
-      }, 2000);
+      }, 500); // Reduced from 2000ms to 500ms for faster loading
     }, 1000);
   };
 

@@ -45,6 +45,7 @@ const PlayerController = (props) => {
   const health = useUserStateStore((state: any) => state.health);
   const setHealth = useUserStateStore((state: any) => state.setHealth);
   const setIsDead = useUserStateStore((state: any) => state.setIsDead);
+  const setPosition = useUserStateStore((state: any) => state.setPosition);
   const positionCorrection = useUserStateStore((state: any) => state.positionCorrection);
   const clearPositionCorrection = useUserStateStore((state: any) => state.clearPositionCorrection);
   const justSentMessage = useChatStore((state) => state.justSentMessage);
@@ -117,6 +118,9 @@ const PlayerController = (props) => {
         objRef.current.position.set(SPAWN_LOCATION.x, SPAWN_LOCATION.y, SPAWN_LOCATION.z);
         obj.rotation.set(0, 0, 0);
 
+        // Update global position state
+        updateGlobalPosition();
+
         // Restart idle animation
         actions["Idle"]?.play();
 
@@ -150,6 +154,9 @@ const PlayerController = (props) => {
       const correctedPos = positionCorrection.correctedPosition;
       objRef.current.position.set(correctedPos.x, correctedPos.y, correctedPos.z);
 
+      // Update global position state
+      updateGlobalPosition();
+
       // Stop walking animation and return to idle
       actions["Walk"]?.stop();
       actions["Idle"]?.play();
@@ -176,6 +183,7 @@ const PlayerController = (props) => {
         .onComplete(() => {
           actions["Walk"]?.stop();
           actions["Idle"]?.play();
+          updateGlobalPosition(); // Update global position when movement completes
           webSocketSendUpdate(
             {
               position: objRef.current.position,
@@ -204,7 +212,22 @@ const PlayerController = (props) => {
     );
   };
 
+  // Update global position state whenever player position changes
+  const updateGlobalPosition = () => {
+    if (objRef.current) {
+      const currentPos = {
+        x: objRef.current.position.x,
+        y: objRef.current.position.y,
+        z: objRef.current.position.z,
+      };
+      setPosition(currentPos);
+    }
+  };
+
   const onPositionUpdate = () => {
+    // Update global position state
+    updateGlobalPosition();
+
     // if clicked enemy
     if (!userFollowing) return;
     // if (!userFollowing.isCombatable) return;
@@ -303,7 +326,10 @@ const PlayerController = (props) => {
 
   useEffect(() => {
     props.setPlayerRef(objRef);
-    if (objRef)
+    if (objRef) {
+      // Update global position state on mount
+      updateGlobalPosition();
+
       webSocketSendUpdate(
         {
           position: objRef.current.position,
@@ -314,6 +340,7 @@ const PlayerController = (props) => {
         websocketConnection,
         allConnections
       );
+    }
   }, [objRef]);
 
   return (

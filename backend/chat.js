@@ -1128,44 +1128,52 @@ exports.handler = async function (event, context) {
 
     case "validateGameState":
       try {
-        // Get player's current state from database
-        const playerParams = {
-          TableName: DB,
-          Key: {
-            PK: bodyAsJSON.chatRoomId,
-            SK: "CONNECTION#" + connectionId,
-          },
-        };
-        const playerData = await dynamodb.get(playerParams).promise();
+        const validationStartTime = Date.now();
+        console.log(`🔍 [${connectionId}] Starting game state validation`);
 
-        // Get active harvests for this player
-        const harvestParams = {
-          TableName: DB,
-          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-          ExpressionAttributeValues: {
-            ":pk": bodyAsJSON.chatRoomId,
-            ":sk": `HARVEST#`,
-          },
-        };
-        const harvestData = await dynamodb.query(harvestParams).promise();
+        // Execute all queries in parallel for better performance
+        const [playerData, harvestData, groundItemData] = await Promise.all([
+          // Get player's current state from database
+          dynamodb.get({
+            TableName: DB,
+            Key: {
+              PK: bodyAsJSON.chatRoomId,
+              SK: "CONNECTION#" + connectionId,
+            },
+          }).promise(),
+
+          // Get active harvests for this player
+          dynamodb.query({
+            TableName: DB,
+            KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+            ExpressionAttributeValues: {
+              ":pk": bodyAsJSON.chatRoomId,
+              ":sk": `HARVEST#`,
+            },
+          }).promise(),
+
+          // Get all ground items in the chatroom
+          dynamodb.query({
+            TableName: DB,
+            KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+            ExpressionAttributeValues: {
+              ":pk": bodyAsJSON.chatRoomId,
+              ":sk": "GROUND_ITEM#",
+            },
+          }).promise()
+        ]);
+
+        const queryTime = Date.now() - validationStartTime;
+        console.log(`⚡ [${connectionId}] Parallel queries completed in ${queryTime}ms`);
 
         // Filter harvests for this player
         const playerHarvests = harvestData.Items.filter(
           harvest => harvest.playerId === connectionId
         );
 
-        // Get all ground items in the chatroom
-        const groundItemParams = {
-          TableName: DB,
-          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-          ExpressionAttributeValues: {
-            ":pk": bodyAsJSON.chatRoomId,
-            ":sk": "GROUND_ITEM#",
-          },
-        };
-        const groundItemData = await dynamodb.query(groundItemParams).promise();
-
         if (playerData.Item) {
+          const processingStartTime = Date.now();
+
           const gameState = {
             inventory: {
               berries: playerData.Item.berries || 0,
@@ -1195,6 +1203,12 @@ exports.handler = async function (event, context) {
             position: playerData.Item.lastValidPosition || { x: 0, y: 0, z: 0 },
           };
 
+          const processingTime = Date.now() - processingStartTime;
+          const totalTime = Date.now() - validationStartTime;
+
+          console.log(`📊 [${connectionId}] Game state validation completed in ${totalTime}ms (queries: ${queryTime}ms, processing: ${processingTime}ms)`);
+          console.log(`📦 [${connectionId}] Game state: ${playerHarvests.length} harvests, ${groundItemData.Items.length} ground items`);
+
           // Send comprehensive game state back to client
           try {
             await apig
@@ -1210,22 +1224,41 @@ exports.handler = async function (event, context) {
           } catch (e) {
             console.log("couldn't send game state validation to " + connectionId, e);
           }
+        } else {
+          console.warn(`⚠️ [${connectionId}] Player data not found during game state validation`);
         }
       } catch (e) {
-        console.error("Error validating game state:", e);
+        const totalTime = Date.now() - validationStartTime;
+        console.error(`❌ [${connectionId}] Error validating game state after ${totalTime}ms:`, e);
+
+        // Send error response to client
+        try {
+          await apig
+            .postToConnection({
+              ConnectionId: connectionId,
+              Data: JSON.stringify({
+                gameStateValidation: false,
+                error: "Failed to validate game state",
+                timestamp: Date.now(),
+              }),
+            })
+            .promise();
+        } catch (sendError) {
+          console.error(`Failed to send error response to ${connectionId}:`, sendError);
+        }
       }
       break;
 
     case "dropItem":
       try {
-        const { itemType, itemSubType, quantity = 1, position } = bodyAsJSON;
+        const { itemType, itemSubType, quantity = 1 } = bodyAsJSON;
 
-        if (!itemType || !position) {
+        if (!itemType) {
           console.error("Missing required fields for dropItem");
           break;
         }
 
-        // Get player's current inventory
+        // Get player's current inventory and verified position
         const playerParams = {
           TableName: DB,
           Key: {
@@ -1239,6 +1272,10 @@ exports.handler = async function (event, context) {
           console.error("Player not found for dropItem");
           break;
         }
+
+        // Use server's verified position instead of client-sent position
+        const verifiedPosition = playerData.Item.lastValidPosition || SPAWN_LOCATION.position;
+        console.log(`Using server verified position for drop: ${JSON.stringify(verifiedPosition)} (player: ${connectionId})`);
 
         // Check if player has the item to drop
         const berryField = `berries_${itemSubType}`;
@@ -1262,7 +1299,7 @@ exports.handler = async function (event, context) {
           },
         }).promise();
 
-        // Create ground item
+        // Create ground item at server's verified position
         const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         await dynamodb.put({
           TableName: DB,
@@ -1272,7 +1309,7 @@ exports.handler = async function (event, context) {
             itemType,
             itemSubType,
             quantity,
-            position,
+            position: verifiedPosition, // Use server's verified position
             droppedBy: connectionId,
             droppedAt: Date.now(),
             ttl: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
@@ -1289,7 +1326,7 @@ exports.handler = async function (event, context) {
             itemType,
             itemSubType,
             quantity,
-            position,
+            position: verifiedPosition, // Use server's verified position
             droppedBy: connectionId,
             droppedAt: Date.now(),
           },
@@ -1299,7 +1336,7 @@ exports.handler = async function (event, context) {
 
         await broadcastToConnections(connections, groundItemMessage);
 
-        console.log(`Player ${connectionId} dropped ${quantity} ${itemSubType} at position`, position);
+        console.log(`Player ${connectionId} dropped ${quantity} ${itemSubType} at verified position`, verifiedPosition);
 
       } catch (e) {
         console.error("Error dropping item:", e);

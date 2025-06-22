@@ -1,5 +1,5 @@
 import React, { memo, useEffect, useState, useRef } from "react";
-import { useChatStore, useInventoryStore, useUserInputStore, useUserStateStore, useWebsocketStore } from "../store";
+import { useChatStore, useInventoryStore, useUserInputStore, useUserStateStore, useWebsocketStore, useGroundItemsStore } from "../store";
 import { webSocketDropItem, webSocketMoveInventoryItem } from "../Api";
 
 type InventoryProps = {
@@ -18,6 +18,7 @@ const Inventory = memo((props: InventoryProps) => {
   const draggedFromSlot = useInventoryStore((state) => state.draggedFromSlot);
   const dragOverSlot = useInventoryStore((state) => state.dragOverSlot);
   const moveItem = useInventoryStore((state) => state.moveItem);
+  const removeItem = useInventoryStore((state) => state.removeItem);
   const setDraggedItem = useInventoryStore((state) => state.setDraggedItem);
   const setDragOverSlot = useInventoryStore((state) => state.setDragOverSlot);
   const clearDragState = useInventoryStore((state) => state.clearDragState);
@@ -27,6 +28,7 @@ const Inventory = memo((props: InventoryProps) => {
   const websocketConnection = useWebsocketStore((state: any) => state.websocketConnection);
   const health = useUserStateStore((state) => state.health);
   const maxHealth = useUserStateStore((state) => state.maxHealth);
+  const addGroundItem = useGroundItemsStore((state: any) => state.addGroundItem);
 
   // Constants for drag detection
   const DRAG_THRESHOLD_MS = 200; // Hold for 200ms to start drag
@@ -95,14 +97,33 @@ const Inventory = memo((props: InventoryProps) => {
     };
 
     const dropItem = () => {
-      // Calculate drop position slightly in front of player
-      const dropPosition = {
-        x: (playerPosition?.x || 0) + (Math.random() - 0.5) * 2,
+      // Create temporary ground item at current player position for immediate visual feedback
+      // Server will determine the actual verified drop location
+      const tempDropPosition = {
+        x: playerPosition?.x || 0,
         y: playerPosition?.y || 0,
-        z: (playerPosition?.z || 0) + (Math.random() - 0.5) * 2,
+        z: playerPosition?.z || 0,
       };
 
-      webSocketDropItem(item.type, item.subType, 1, dropPosition, websocketConnection);
+      // Create temporary ground item ID for immediate feedback
+      const tempGroundItemId = `TEMP_GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Add ground item immediately for visual feedback
+      const tempGroundItem = {
+        id: tempGroundItemId,
+        itemType: item.type,
+        itemSubType: item.subType,
+        quantity: 1,
+        position: tempDropPosition,
+        droppedBy: 'local', // Mark as local for potential cleanup
+        droppedAt: Date.now(),
+        isTemporary: true, // Flag to identify temporary items
+      };
+
+      addGroundItem(tempGroundItem);
+
+      // Send drop request to server (server will use verified position)
+      webSocketDropItem(item.type, item.subType, 1, websocketConnection);
       setClickedOtherObject(null);
     };
 
@@ -153,6 +174,69 @@ const Inventory = memo((props: InventoryProps) => {
 
   const handleDragEnd = (e) => {
     console.log('Drag ended');
+
+    // Check if we have a dragged item and if the drop was outside the inventory
+    if (draggedItem && draggedFromSlot !== null) {
+      // Get the inventory container element
+      const inventoryElement = e.currentTarget.closest('.inventory');
+
+      if (inventoryElement) {
+        const rect = inventoryElement.getBoundingClientRect();
+        const dropX = e.clientX;
+        const dropY = e.clientY;
+
+        // Check if drop position is outside inventory bounds
+        const isOutsideInventory = (
+          dropX < rect.left ||
+          dropX > rect.right ||
+          dropY < rect.top ||
+          dropY > rect.bottom
+        );
+
+        if (isOutsideInventory) {
+          console.log('Item dropped outside inventory, dropping to world');
+
+          // Create temporary ground item at current player position for immediate visual feedback
+          // Server will determine the actual verified drop location
+          const tempDropPosition = {
+            x: playerPosition?.x || 0,
+            y: playerPosition?.y || 0,
+            z: playerPosition?.z || 0,
+          };
+
+          // Create temporary ground item ID for immediate feedback
+          const tempGroundItemId = `TEMP_GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+          // Add ground item immediately for visual feedback
+          const tempGroundItem = {
+            id: tempGroundItemId,
+            itemType: draggedItem.type,
+            itemSubType: draggedItem.subType,
+            quantity: draggedItem.quantity || 1,
+            position: tempDropPosition,
+            droppedBy: 'local', // Mark as local for potential cleanup
+            droppedAt: Date.now(),
+            isTemporary: true, // Flag to identify temporary items
+          };
+
+          addGroundItem(tempGroundItem);
+
+          // Drop the item to the world (server will use verified position)
+          if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
+            webSocketDropItem(
+              draggedItem.type,
+              draggedItem.subType,
+              draggedItem.quantity || 1,
+              websocketConnection
+            );
+
+            // Remove the item from inventory locally for immediate feedback
+            removeItem(draggedItem.id);
+          }
+        }
+      }
+    }
+
     clearDragState();
     mouseDownTimeRef.current = null;
     dragStartSlotRef.current = null;
@@ -187,12 +271,88 @@ const Inventory = memo((props: InventoryProps) => {
     clearDragState();
   };
 
+  // Global drop handler for dropping items outside inventory
+  const handleGlobalDrop = (e) => {
+    // Only handle if we have a dragged item and the drop target is not within the inventory
+    if (draggedItem && draggedFromSlot !== null) {
+      const inventoryElement = document.querySelector('.inventory');
+      const dropTarget = e.target;
+
+      // Check if the drop target is outside the inventory
+      if (inventoryElement && !inventoryElement.contains(dropTarget)) {
+        e.preventDefault();
+        console.log('Global drop detected outside inventory, dropping to world');
+
+        // Create temporary ground item at current player position for immediate visual feedback
+        // Server will determine the actual verified drop location
+        const tempDropPosition = {
+          x: playerPosition?.x || 0,
+          y: playerPosition?.y || 0,
+          z: playerPosition?.z || 0,
+        };
+
+        // Create temporary ground item ID for immediate feedback
+        const tempGroundItemId = `TEMP_GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        // Add ground item immediately for visual feedback
+        const tempGroundItem = {
+          id: tempGroundItemId,
+          itemType: draggedItem.type,
+          itemSubType: draggedItem.subType,
+          quantity: draggedItem.quantity || 1,
+          position: tempDropPosition,
+          droppedBy: 'local', // Mark as local for potential cleanup
+          droppedAt: Date.now(),
+          isTemporary: true, // Flag to identify temporary items
+        };
+
+        addGroundItem(tempGroundItem);
+
+        // Drop the item to the world (server will use verified position)
+        if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
+          webSocketDropItem(
+            draggedItem.type,
+            draggedItem.subType,
+            draggedItem.quantity || 1,
+            websocketConnection
+          );
+
+          // Remove the item from inventory locally for immediate feedback
+          removeItem(draggedItem.id);
+        }
+
+        clearDragState();
+      }
+    }
+  };
+
+  // Global dragover handler to allow dropping
+  const handleGlobalDragOver = (e) => {
+    if (draggedItem && draggedFromSlot !== null) {
+      const inventoryElement = document.querySelector('.inventory');
+      const dropTarget = e.target;
+
+      // Allow drop if outside inventory
+      if (inventoryElement && !inventoryElement.contains(dropTarget)) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      }
+    }
+  };
+
   useEffect(() => {
     window.addEventListener("keydown", keyDownHandler, false);
+
+    // Add global drag and drop event listeners
+    document.addEventListener("drop", handleGlobalDrop, false);
+    document.addEventListener("dragover", handleGlobalDragOver, false);
+
     return () => {
       window.removeEventListener("keydown", keyDownHandler);
+      document.removeEventListener("drop", handleGlobalDrop);
+      document.removeEventListener("dragover", handleGlobalDragOver);
     };
-  }, [showInventory, focusedChat]);
+  }, [showInventory, focusedChat, draggedItem, draggedFromSlot, playerPosition, websocketConnection, removeItem, addGroundItem]);
 
   return (
     <>

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { useUserInputStore, useWebsocketStore } from "../../store";
+import { useUserInputStore, useWebsocketStore, useInventoryStore, useGroundItemsStore } from "../../store";
 import { webSocketPickupItem } from "../../Api";
 import { Html } from "@react-three/drei";
 
@@ -29,11 +29,31 @@ const GroundItem: React.FC<GroundItemProps> = ({ groundItem }) => {
   const [isHovered, setIsHovered] = useState(false);
   const setClickedOtherObject = useUserInputStore((state: any) => state.setClickedOtherObject);
   const websocketConnection = useWebsocketStore((state: any) => state.websocketConnection);
+  const addItem = useInventoryStore((state: any) => state.addItem);
+  const markItemBeingPickedUp = useGroundItemsStore((state: any) => state.markItemBeingPickedUp);
 
   const berryConfig = BERRY_TYPES[groundItem.itemSubType as keyof typeof BERRY_TYPES] || BERRY_TYPES.blueberry;
 
   const pickupItem = () => {
     if (!websocketConnection) return;
+
+    console.log(`Starting pickup for item ${groundItem.id}`);
+
+    // Optimistically add item to inventory for immediate feedback
+    const inventoryItem = {
+      type: 'berry',
+      subType: groundItem.itemSubType,
+      name: berryConfig.name,
+      quantity: groundItem.quantity,
+      icon: berryConfig.icon || '/berry.svg',
+    };
+
+    addItem(inventoryItem);
+
+    // Mark item as being picked up (removes from ground and prevents sync conflicts)
+    markItemBeingPickedUp(groundItem.id);
+
+    // Send pickup request to server
     webSocketPickupItem(groundItem.id, websocketConnection);
     setClickedOtherObject(null);
   };

@@ -1,8 +1,23 @@
 const AWS = require("aws-sdk");
 const dynamodb = new AWS.DynamoDB.DocumentClient();
-const apig = new AWS.ApiGatewayManagementApi({
-  endpoint: process.env.APIG_ENDPOINT,
-});
+
+// Handle offline environment for API Gateway Management API
+let apig = null;
+try {
+  const endpoint = process.env.IS_OFFLINE
+    ? `http://localhost:3001`
+    : process.env.APIG_ENDPOINT;
+
+  if (endpoint) {
+    apig = new AWS.ApiGatewayManagementApi({
+      endpoint: endpoint,
+    });
+  } else {
+    console.warn("⚠️ APIG_ENDPOINT not set, WebSocket operations will be skipped");
+  }
+} catch (error) {
+  console.warn("⚠️ Failed to initialize API Gateway Management API:", error.message);
+}
 
 const DB = process.env.DB;
 
@@ -71,23 +86,29 @@ exports.cleanupStaleConnections = async (event, context) => {
         }
         
         // Test if connection is still active by trying to send a ping
-        try {
-          await apig.postToConnection({
-            ConnectionId: connectionId,
-            Data: JSON.stringify({ type: "ping", timestamp: Date.now() }),
-          }).promise();
-          
-          logger.debug(`✅ Connection ${connectionId} is active`);
-          
-        } catch (e) {
-          if (e.statusCode === 410) {
-            logger.debug(`💀 Connection ${connectionId} is stale (410 error)`);
-            await deleteConnection(chatRoomId, connectionId);
-            staleConnections++;
-          } else {
-            logger.warn(`❌ Error testing connection ${connectionId}: ${e.statusCode} - ${e.message}`);
-            errorConnections++;
+        // Skip WebSocket testing in offline mode
+        if (apig && !process.env.IS_OFFLINE) {
+          try {
+            await apig.postToConnection({
+              ConnectionId: connectionId,
+              Data: JSON.stringify({ type: "ping", timestamp: Date.now() }),
+            }).promise();
+
+            logger.debug(`✅ Connection ${connectionId} is active`);
+
+          } catch (e) {
+            if (e.statusCode === 410) {
+              logger.debug(`💀 Connection ${connectionId} is stale (410 error)`);
+              await deleteConnection(chatRoomId, connectionId);
+              staleConnections++;
+            } else {
+              logger.warn(`❌ Error testing connection ${connectionId}: ${e.statusCode} - ${e.message}`);
+              errorConnections++;
+            }
           }
+        } else {
+          // In offline mode, just log that we're skipping WebSocket testing
+          logger.debug(`🔧 Offline mode: Skipping WebSocket test for ${connectionId}`);
         }
       }
       
