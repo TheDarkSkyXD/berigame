@@ -67,8 +67,8 @@ const GroundItem: React.FC<GroundItemProps> = ({ groundItem }) => {
       {/* Ground item visual representation */}
       <mesh>
         <sphereGeometry args={[0.15, 8, 8]} />
-        <meshStandardMaterial 
-          color={berryConfig.color} 
+        <meshStandardMaterial
+          color={berryConfig.color}
           emissive={isHovered ? berryConfig.color : '#000000'}
           emissiveIntensity={isHovered ? 0.2 : 0}
         />
@@ -133,14 +133,6 @@ const GroundItem: React.FC<GroundItemProps> = ({ groundItem }) => {
         </Html>
       )}
 
-      {/* Subtle floating animation */}
-      <animateTransform
-        attributeName="transform"
-        type="translate"
-        values="0,0,0; 0,0.05,0; 0,0,0"
-        dur="2s"
-        repeatCount="indefinite"
-      />
     </group>
   );
 };

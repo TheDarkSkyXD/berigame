@@ -107,6 +107,51 @@ exports.handler = async function (event, context) {
           }
         }
 
+      // Reset player's inventory and health/position
+      const respawnParams = {
+        TableName: process.env.DB,
+        Key: {
+          PK: chatRoomId,
+          SK: "CONNECTION#" + connectionId,
+        },
+        UpdateExpression: "SET health = :health, #pos = :position, #rot = :rotation, berries = :zero, berries_blueberry = :zero, berries_strawberry = :zero, berries_greenberry = :zero, berries_goldberry = :zero",
+        ExpressionAttributeNames: {
+          "#pos": "position",
+          "#rot": "rotation"
+        },
+        ExpressionAttributeValues: {
+          ":health": MAX_HEALTH,
+          ":position": SPAWN_LOCATION.position,
+          ":rotation": SPAWN_LOCATION.rotation,
+          ":zero": 0,
+        },
+      };
+
+      // 1. Respawn the player
+      await dynamodb.update(respawnParams).promise();
+      console.log(`Player ${connectionId} respawned successfully, dropped ${droppedItems.length} item stacks`);
+
+      // 2. Get all connections to broadcast death/respawn event
+      const usersParams = {
+        TableName: process.env.DB,
+        KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+        ExpressionAttributeValues: {
+          ":pk": chatRoomId,
+          ":sk": "CONNECTION#",
+        },
+      };
+
+      const getConnections = await dynamodb.query(usersParams).promise();
+
+      // 3. Broadcast death/respawn event and dropped items to all connected players
+      const deathMessage = {
+        type: "playerDeath",
+        deadPlayerId: connectionId,
+        respawnLocation: SPAWN_LOCATION,
+        droppedItems: droppedItems,
+        timestamp: Date.now(),
+      };
+
       const respawnMessage = {
         type: "playerRespawn",
         playerId: connectionId,
@@ -115,27 +160,8 @@ exports.handler = async function (event, context) {
         rotation: SPAWN_LOCATION.rotation,
         timestamp: Date.now(),
       };
-        // Reset player's inventory and health/position
-        const respawnParams = {
-          TableName: process.env.DB,
-          Key: {
-            PK: chatRoomId,
-            SK: "CONNECTION#" + connectionId,
-          },
-          UpdateExpression: "SET health = :health, #pos = :position, #rot = :rotation, berries = :zero, berries_blueberry = :zero, berries_strawberry = :zero, berries_greenberry = :zero, berries_goldberry = :zero",
-          ExpressionAttributeNames: {
-            "#pos": "position",
-            "#rot": "rotation"
-          },
-          ExpressionAttributeValues: {
-            ":health": MAX_HEALTH,
-            ":position": SPAWN_LOCATION.position,
-            ":rotation": SPAWN_LOCATION.rotation,
-            ":zero": 0,
-          },
-        };
 
-      // Send death event to all players
+      // Send death event and dropped items to all players
       for (const connection of getConnections.Items) {
         const targetConnectionId = connection.SK.split("#")[1];
         try {
@@ -145,75 +171,32 @@ exports.handler = async function (event, context) {
               Data: JSON.stringify(deathMessage),
             })
             .promise();
-        await dynamodb.update(respawnParams).promise();
-        console.log(`Player ${connectionId} respawned successfully, dropped ${droppedItems.length} item stacks`);
 
-        // 2. Get all connections to broadcast death/respawn event
-        const usersParams = {
-          TableName: process.env.DB,
-          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-          ExpressionAttributeValues: {
-            ":pk": chatRoomId,
-            ":sk": "CONNECTION#",
-          },
-        };
+          // Send respawn event immediately after death event
+          await apig
+            .postToConnection({
+              ConnectionId: targetConnectionId,
+              Data: JSON.stringify(respawnMessage),
+            })
+            .promise();
 
-        const getConnections = await dynamodb.query(usersParams).promise();
-
-        // 3. Broadcast death/respawn event and dropped items to all connected players
-        const deathMessage = {
-          type: "playerDeath",
-          deadPlayerId: connectionId,
-          respawnLocation: SPAWN_LOCATION,
-          droppedItems: droppedItems,
-          timestamp: Date.now(),
-        };
-
-        const respawnMessage = {
-          type: "playerRespawn",
-          playerId: connectionId,
-          health: MAX_HEALTH,
-          position: SPAWN_LOCATION.position,
-          rotation: SPAWN_LOCATION.rotation,
-          timestamp: Date.now(),
-        };
-
-        // Send death event and dropped items to all players
-        for (const connection of getConnections.Items) {
-          const targetConnectionId = connection.SK.split("#")[1];
-          try {
+          // Send individual ground item creation events for each dropped item
+          for (const droppedItem of droppedItems) {
             await apig
               .postToConnection({
                 ConnectionId: targetConnectionId,
-                Data: JSON.stringify(deathMessage),
+                Data: JSON.stringify({
+                  type: "groundItemCreated",
+                  groundItem: droppedItem,
+                  timestamp: Date.now(),
+                }),
               })
               .promise();
-
-            // Send respawn event immediately after death event
-            await apig
-              .postToConnection({
-                ConnectionId: targetConnectionId,
-                Data: JSON.stringify(respawnMessage),
-              })
-              .promise();
-
-            // Send individual ground item creation events for each dropped item
-            for (const droppedItem of droppedItems) {
-              await apig
-                .postToConnection({
-                  ConnectionId: targetConnectionId,
-                  Data: JSON.stringify({
-                    type: "groundItemCreated",
-                    groundItem: droppedItem,
-                    timestamp: Date.now(),
-                  }),
-                })
-                .promise();
-            }
-          } catch (e) {
-            console.log(`Couldn't send death/respawn message to ${targetConnectionId}:`, e);
           }
+        } catch (e) {
+          console.log(`Couldn't send death/respawn message to ${targetConnectionId}:`, e);
         }
+      }
       }
 
     } catch (error) {
