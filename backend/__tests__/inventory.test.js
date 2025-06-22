@@ -4,19 +4,14 @@
  * Tests for the new slot-based inventory system including:
  * - Item definitions
  * - Inventory operations
- * - Migration logic
+
  * - Backend helper functions
  */
 
 const { describe, it, expect, beforeEach } = require('@jest/globals');
-const { InventoryManager } = require('../shared/inventoryOperations.js');
-const { getItemDefinition, isValidItemId, ITEM_DEFINITIONS } = require('../shared/itemDefinitions.js');
-const { 
-  migrateLegacyInventory, 
-  needsMigration, 
-  createCleanPlayerData,
-  validateMigration 
-} = require('../shared/inventoryMigration.js');
+const { InventoryManager } = require('../../shared/inventoryOperations.js');
+const { getItemDefinition, isValidItemId, ITEM_DEFINITIONS } = require('../../shared/itemDefinitions.js');
+
 const {
   getPlayerInventory,
   addItemToInventory,
@@ -175,83 +170,7 @@ describe('Inventory Manager', () => {
   });
 });
 
-describe('Legacy Migration', () => {
-  it('should detect players needing migration', () => {
-    const legacyPlayer = {
-      berries: 10,
-      berries_blueberry: 5,
-      berries_strawberry: 3,
-      berries_greenberry: 2,
-      berries_goldberry: 0
-    };
-    
-    const newPlayer = {
-      inventory: [
-        { itemId: 'berry_blueberry', quantity: 5, instanceId: 'item_123' }
-      ]
-    };
-    
-    expect(needsMigration(legacyPlayer)).toBe(true);
-    expect(needsMigration(newPlayer)).toBe(false);
-  });
 
-  it('should migrate legacy inventory correctly', () => {
-    const legacyPlayer = {
-      berries_blueberry: 5,
-      berries_strawberry: 3,
-      berries_greenberry: 2,
-      berries_goldberry: 1
-    };
-    
-    const migratedInventory = migrateLegacyInventory(legacyPlayer);
-    expect(Array.isArray(migratedInventory)).toBe(true);
-    
-    // Create inventory manager to validate
-    const inventory = new InventoryManager(migratedInventory);
-    expect(inventory.getItemCount('berry_blueberry')).toBe(5);
-    expect(inventory.getItemCount('berry_strawberry')).toBe(3);
-    expect(inventory.getItemCount('berry_greenberry')).toBe(2);
-    expect(inventory.getItemCount('berry_goldberry')).toBe(1);
-  });
-
-  it('should validate migration results', () => {
-    const legacyPlayer = {
-      berries_blueberry: 10,
-      berries_strawberry: 5
-    };
-    
-    const migratedInventory = migrateLegacyInventory(legacyPlayer);
-    const validation = validateMigration(legacyPlayer, migratedInventory);
-    
-    expect(validation.success).toBe(true);
-    expect(validation.errors).toHaveLength(0);
-    expect(validation.stats.totalItems).toBe(15);
-  });
-
-  it('should create clean player data', () => {
-    const legacyPlayer = {
-      SK: 'CONNECTION#test123',
-      health: 100,
-      berries: 8,
-      berries_blueberry: 5,
-      berries_strawberry: 3,
-      position: { x: 0, y: 0, z: 0 }
-    };
-    
-    const cleanData = createCleanPlayerData(legacyPlayer);
-    
-    expect(cleanData.SK).toBe('CONNECTION#test123');
-    expect(cleanData.health).toBe(100);
-    expect(cleanData.position).toEqual({ x: 0, y: 0, z: 0 });
-    expect(cleanData.inventory).toBeDefined();
-    expect(Array.isArray(cleanData.inventory)).toBe(true);
-    
-    // Legacy fields should be removed
-    expect(cleanData.berries).toBeUndefined();
-    expect(cleanData.berries_blueberry).toBeUndefined();
-    expect(cleanData.berries_strawberry).toBeUndefined();
-  });
-});
 
 describe('Backend Helper Functions', () => {
   const mockPlayerData = {

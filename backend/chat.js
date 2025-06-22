@@ -12,12 +12,10 @@ const {
   playerHasItem,
   getPlayerItemCount,
   createInventoryUpdateExpression,
-  createMigrationUpdateExpression,
   consumeItem,
   createGroundItemData,
   groundItemToInventoryItem,
-  getInventorySyncData,
-  needsMigration
+  getInventorySyncData
 } = require("./inventoryHelper");
 const apig = new AWS.ApiGatewayManagementApi({
   //Offline check for websocket issue with serverless offline
@@ -595,29 +593,8 @@ exports.handler = async function (event, context) {
       );
 
       if (playerConnection) {
-        // Handle migration if needed and get inventory sync data
+        // Get inventory sync data
         const inventoryData = getInventorySyncData(playerConnection);
-
-        // If migration was needed, update the database
-        if (needsMigration(playerConnection)) {
-          try {
-            const inventory = getPlayerInventory(playerConnection);
-            const updateExpression = createMigrationUpdateExpression(inventory);
-
-            await dynamodb.update({
-              TableName: DB,
-              Key: {
-                PK: playerConnection.PK,
-                SK: playerConnection.SK,
-              },
-              ...updateExpression
-            }).promise();
-
-            console.log(`Migrated inventory for player ${connectionId}`);
-          } catch (e) {
-            console.error(`Failed to migrate inventory for player ${connectionId}:`, e);
-          }
-        }
 
         try {
           await apig
@@ -1105,29 +1082,8 @@ exports.handler = async function (event, context) {
         const playerData = await dynamodb.get(playerParams).promise();
 
         if (playerData.Item) {
-          // Handle migration if needed and get inventory sync data
+          // Get inventory sync data
           const inventoryData = getInventorySyncData(playerData.Item);
-
-          // If migration was needed, update the database
-          if (needsMigration(playerData.Item)) {
-            try {
-              const inventory = getPlayerInventory(playerData.Item);
-              const updateExpression = createMigrationUpdateExpression(inventory);
-
-              await dynamodb.update({
-                TableName: DB,
-                Key: {
-                  PK: playerData.Item.PK,
-                  SK: playerData.Item.SK,
-                },
-                ...updateExpression
-              }).promise();
-
-              console.log(`Migrated inventory for player ${connectionId} during validation`);
-            } catch (e) {
-              console.error(`Failed to migrate inventory for player ${connectionId}:`, e);
-            }
-          }
 
           // Send authoritative inventory state back to client
           try {
@@ -1163,29 +1119,8 @@ exports.handler = async function (event, context) {
         const playerData = await dynamodb.get(playerParams).promise();
 
         if (playerData.Item) {
-          // Handle migration if needed and get inventory sync data
+          // Get inventory sync data
           const inventoryData = getInventorySyncData(playerData.Item);
-
-          // If migration was needed, update the database
-          if (needsMigration(playerData.Item)) {
-            try {
-              const inventory = getPlayerInventory(playerData.Item);
-              const updateExpression = createMigrationUpdateExpression(inventory);
-
-              await dynamodb.update({
-                TableName: DB,
-                Key: {
-                  PK: playerData.Item.PK,
-                  SK: playerData.Item.SK,
-                },
-                ...updateExpression
-              }).promise();
-
-              console.log(`Migrated inventory for player ${connectionId} during sync`);
-            } catch (e) {
-              console.error(`Failed to migrate inventory for player ${connectionId}:`, e);
-            }
-          }
 
           try {
             await apig
@@ -1255,29 +1190,8 @@ exports.handler = async function (event, context) {
         if (playerData.Item) {
           const processingStartTime = Date.now();
 
-          // Handle migration if needed and get inventory data
+          // Get inventory data
           const inventoryData = getInventorySyncData(playerData.Item);
-
-          // If migration was needed, update the database
-          if (needsMigration(playerData.Item)) {
-            try {
-              const inventory = getPlayerInventory(playerData.Item);
-              const updateExpression = createMigrationUpdateExpression(inventory);
-
-              await dynamodb.update({
-                TableName: DB,
-                Key: {
-                  PK: playerData.Item.PK,
-                  SK: playerData.Item.SK,
-                },
-                ...updateExpression
-              }).promise();
-
-              console.log(`Migrated inventory for player ${connectionId} during game state validation`);
-            } catch (e) {
-              console.error(`Failed to migrate inventory for player ${connectionId}:`, e);
-            }
-          }
 
           const gameState = {
             inventory: inventoryData,

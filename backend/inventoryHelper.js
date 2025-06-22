@@ -6,21 +6,33 @@
 
 const { InventoryManager } = require('../shared/inventoryOperations.js');
 const { getItemDefinition, getLegacyBerryItemId } = require('../shared/itemDefinitions.js');
-const { migrateLegacyInventory, needsMigration, createCleanPlayerData } = require('../shared/inventoryMigration.js');
 
 /**
  * Get player's inventory from database data
  */
 const getPlayerInventory = (playerData) => {
-  // Check if migration is needed
-  if (needsMigration(playerData)) {
-    console.log(`Migrating inventory for player ${playerData.SK}`);
-    const migratedData = createCleanPlayerData(playerData);
-    return new InventoryManager(migratedData.inventory);
+  const inventoryData = playerData.inventory || [];
+
+  // Handle different inventory formats
+  if (inventoryData.length === 0) {
+    // Empty inventory
+    return new InventoryManager();
   }
 
-  // Use existing inventory data
-  return new InventoryManager(playerData.inventory);
+  // Check if it's already in serialized format (array of 28 slot objects)
+  if (inventoryData.length === 28 && inventoryData[0] && typeof inventoryData[0].slotIndex === 'number') {
+    return new InventoryManager(inventoryData);
+  }
+
+  // Handle compact format (array of item objects) - convert to InventoryManager
+  const inventory = new InventoryManager();
+  for (const itemData of inventoryData) {
+    if (itemData && itemData.itemId && itemData.quantity) {
+      inventory.addItem(itemData.itemId, itemData.quantity, itemData.metadata || {});
+    }
+  }
+
+  return inventory;
 };
 
 /**
@@ -85,17 +97,7 @@ const createInventoryUpdateExpression = (inventory) => {
   };
 };
 
-/**
- * Create DynamoDB update expression to remove legacy berry fields and set new inventory
- */
-const createMigrationUpdateExpression = (inventory) => {
-  return {
-    UpdateExpression: 'SET inventory = :inventory REMOVE berries, berries_blueberry, berries_strawberry, berries_greenberry, berries_goldberry',
-    ExpressionAttributeValues: {
-      ':inventory': inventory.serialize()
-    }
-  };
-};
+
 
 /**
  * Get consumable effect for an item
@@ -247,11 +249,9 @@ module.exports = {
   playerHasItem,
   getPlayerItemCount,
   createInventoryUpdateExpression,
-  createMigrationUpdateExpression,
   getConsumeEffect,
   consumeItem,
   createGroundItemData,
   groundItemToInventoryItem,
-  getInventorySyncData,
-  needsMigration
+  getInventorySyncData
 };

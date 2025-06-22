@@ -5,8 +5,7 @@
   "main": "handler.js",
   "scripts": {
     "test": "jest",
-    "test:watch": "jest --watch",
-    "migrate-inventory": "node migrate-inventory.js"
+    "test:watch": "jest --watch"
   },
   "repository": {
     "type": "git",
@@ -27,6 +26,8 @@
     "ws": "^8.18.2"
   },
   "devDependencies": {
+    "@jest/globals": "^30.0.2",
+    "jest": "^30.0.2",
     "serverless-api-gateway-throttling": "^2.0.2",
     "serverless-offline": "^14.4.0"
   }

@@ -45,6 +45,6 @@ resources:
 
 custom:
   secrets: ${file(secrets.json)}
-        
+
 plugins:
   - serverless-offline
