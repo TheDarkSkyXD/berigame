@@ -37,10 +37,45 @@ class PositionValidator {
    */
   async validatePositionUpdate(connectionId, chatRoomId, newPosition, timestamp) {
     const startTime = Date.now();
+
+    // Fast validation for development environment
+    // Check multiple possible environment indicators for serverless offline
+    const isOffline = process.env.IS_OFFLINE ||
+                     process.env.NODE_ENV === 'development' ||
+                     process.env.SERVERLESS_OFFLINE ||
+                     process.env.AWS_EXECUTION_ENV === undefined;
+
+    console.log(`🔍 Environment check: IS_OFFLINE=${process.env.IS_OFFLINE}, NODE_ENV=${process.env.NODE_ENV}, AWS_EXECUTION_ENV=${process.env.AWS_EXECUTION_ENV}, isOffline=${isOffline}`);
+
+    if (isOffline) {
+      console.log(`🚀 [DEV] Fast validation for ${connectionId}`);
+
+      // Only do basic boundary checks in development
+      if (!this.isWithinWorldBounds(newPosition)) {
+        console.log(`❌ [DEV] Boundary violation detected`);
+        return {
+          valid: false,
+          correctedPosition: this.clampToWorldBounds(newPosition),
+          reason: "boundary_violation"
+        };
+      }
+
+      // Skip database operations in development for speed
+      const validationTime = Date.now() - startTime;
+      console.log(`⚡ [DEV] Fast validation completed in ${validationTime}ms`);
+
+      return {
+        valid: true,
+        correctedPosition: newPosition,
+        reason: "valid_movement_dev"
+      };
+    }
+
+    // Full validation for production
     try {
       // Get player's current state from database
       const playerState = await this.getPlayerState(connectionId, chatRoomId);
-      
+
       if (!playerState) {
         // New player - initialize with spawn location
         await this.initializePlayerPosition(connectionId, chatRoomId, SPAWN_LOCATION, timestamp);
@@ -105,8 +140,8 @@ class PositionValidator {
         };
       }
 
-      // Position is valid - update player state
-      await this.updatePlayerPosition(connectionId, chatRoomId, newPosition, timestamp);
+      // Position is valid - update player state (pass existing state to avoid extra DB call)
+      await this.updatePlayerPosition(connectionId, chatRoomId, newPosition, timestamp, playerState);
 
       // Log performance metrics
       const validationTime = Date.now() - startTime;
@@ -132,20 +167,16 @@ class PositionValidator {
   }
 
   /**
-   * Log performance metrics for monitoring
+   * Log performance metrics for monitoring (optimized)
    */
   logPerformanceMetrics(validationTime, success) {
-    const performanceMetrics = {
-      timestamp: new Date().toISOString(),
-      metric: 'position_validation_performance',
-      validation_time_ms: validationTime,
-      success: success
-    };
-
-    // Log warning if validation takes too long (only in development)
-    if (validationTime > 1000 && process.env.NODE_ENV === 'development') {
+    // Only log if validation takes too long to avoid excessive logging
+    if (validationTime > 500) {
       console.warn(`Position validation took ${validationTime}ms - consider optimization`);
     }
+
+    // In production, you could send metrics to CloudWatch/DataDog here
+    // For now, we'll skip detailed logging to improve performance
   }
 
   /**
@@ -197,21 +228,20 @@ class PositionValidator {
   }
 
   /**
-   * Check rate limiting for position updates
+   * Check rate limiting for position updates (optimized)
    */
   checkRateLimit(playerState, timestamp) {
     const timeSinceLastUpdate = timestamp - playerState.lastPositionUpdate;
-    
+
     if (timeSinceLastUpdate < MIN_UPDATE_INTERVAL) {
       return { valid: false, reason: "update_too_frequent" };
     }
 
-    // Check updates per second
-    const recentUpdates = playerState.positionHistory.filter(
-      update => timestamp - update.timestamp < 1000
-    );
-    
-    if (recentUpdates.length >= MAX_UPDATES_PER_SECOND) {
+    // Simplified rate limiting - just check time since last update
+    // This is more performant than filtering through position history
+    const updatesPerSecond = 1000 / timeSinceLastUpdate;
+
+    if (updatesPerSecond > MAX_UPDATES_PER_SECOND) {
       return { valid: false, reason: "too_many_updates" };
     }
 
@@ -285,15 +315,18 @@ class PositionValidator {
   }
 
   /**
-   * Update player position in database
+   * Update player position in database (optimized to avoid extra DB call)
    */
-  async updatePlayerPosition(connectionId, chatRoomId, position, timestamp) {
-    // Keep only last 10 position history entries
-    const playerState = await this.getPlayerState(connectionId, chatRoomId);
-    const positionHistory = playerState.positionHistory || [];
+  async updatePlayerPosition(connectionId, chatRoomId, position, timestamp, existingPlayerState = null) {
+    // Use existing player state if provided to avoid extra DB call
+    const playerState = existingPlayerState || await this.getPlayerState(connectionId, chatRoomId);
+    const positionHistory = playerState?.positionHistory || [];
+
+    // Add new position to history
     positionHistory.push({ position, timestamp });
-    
-    if (positionHistory.length > 10) {
+
+    // Keep only last 5 position history entries (reduced from 10 for performance)
+    if (positionHistory.length > 5) {
       positionHistory.shift();
     }
 
@@ -303,7 +336,7 @@ class PositionValidator {
         PK: chatRoomId,
         SK: "CONNECTION#" + connectionId
       },
-      UpdateExpression: `SET 
+      UpdateExpression: `SET
         lastValidPosition = :pos,
         lastPositionUpdate = :timestamp,
         positionHistory = :history,
