@@ -49,6 +49,8 @@ connectionHandler:
     - websocket:
         route: completeHarvest
     - websocket:
+        route: consumeBerry
+    - websocket:
         route: cancelHarvest
     - websocket:
         route: validateInventory

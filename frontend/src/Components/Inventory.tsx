@@ -14,6 +14,9 @@ const Inventory = memo((props: InventoryProps) => {
   const setClickedOtherObject = useUserInputStore((state: any) => state.setClickedOtherObject);
   const playerPosition = useUserStateStore((state: any) => state.position);
   const websocketConnection = useWebsocketStore((state: any) => state.websocketConnection);
+  const health = useUserStateStore((state) => state.health);
+  const maxHealth = useUserStateStore((state) => state.maxHealth);
+
 
   const keyDownHandler = (e) => {
     if (e.keyCode === 73 && !focusedChat) {
@@ -21,6 +24,26 @@ const Inventory = memo((props: InventoryProps) => {
     }
   };
 
+  const consumeBerry = (item) => {
+    if (!item || item.type !== 'berry') return;
+
+    // Check if player can benefit from healing
+    if (health >= maxHealth) {
+      console.log("Health is already full, cannot consume berry");
+      return;
+    }
+
+    // Send consumption request to backend
+    if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
+      const payload = {
+        action: "consumeBerry",
+        chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+        berryType: item.subType,
+        itemId: item.id
+      };
+      websocketConnection.send(JSON.stringify(payload));
+    }
+  };
   const handleItemClick = (item: any, e: React.MouseEvent) => {
     if (!item || !websocketConnection) return;
 
@@ -93,6 +116,7 @@ const Inventory = memo((props: InventoryProps) => {
             background: "rgba(0, 0, 0, 0.8)",
             border: "1px solid #333",
             borderRadius: "8px",
+            pointerEvents: 'all'
           }}
         >
           {Array(28)
@@ -114,8 +138,8 @@ const Inventory = memo((props: InventoryProps) => {
                     position: "relative",
                     cursor: item ? "pointer" : "default",
                   }}
-                  title={item ? `${item.name} (${item.quantity || 1})` : "Empty slot"}
-                  onClick={item ? (e) => handleItemClick(item, e) : undefined}
+                  title={item ? `${item.name} (${item.quantity || 1})${item.type === 'berry' ? ' - Click to eat' : ''}` : "Empty slot"}
+                  onClick={() => item && item.type === 'berry' && consumeBerry(item)}
                 >
                   {item && (
                     <>

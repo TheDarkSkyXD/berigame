@@ -209,6 +209,25 @@ describe('Inventory Store', () => {
     expect(state.items).toHaveLength(0)
   })
 
+  it('should identify berry items correctly', () => {
+    const { addItem } = useInventoryStore.getState()
+
+    // Add a berry item
+    addItem({
+      type: 'berry',
+      subType: 'blueberry',
+      name: 'Blueberry',
+      quantity: 1,
+    })
+
+    const state = useInventoryStore.getState()
+    const berryItem = state.items[0]
+
+    expect(berryItem.type).toBe('berry')
+    expect(berryItem.subType).toBe('blueberry')
+    expect(berryItem.name).toBe('Blueberry')
+  })
+
   it('should track validation timing', () => {
     const { shouldValidate, markValidated } = useInventoryStore.getState()
 

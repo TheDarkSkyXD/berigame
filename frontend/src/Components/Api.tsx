@@ -61,10 +61,10 @@ const Api = (props) => {
   const clearGroundItems = useGroundItemsStore((state: any) => state.clearGroundItems);
   const syncGroundItems = useGroundItemsStore((state: any) => state.syncGroundItems);
 
-  // if (process.env.NODE_ENV === "development") {
-  //   url = "http://localhost:3000/dev/";
-  //   wsUrl = "ws://localhost:3001";
-  // }
+  if (process.env.NODE_ENV === "development") {
+    url = "http://localhost:3000/dev/";
+    wsUrl = "ws://localhost:3001";
+  }
   let clientConnectionId = null;
 
   useEffect(() => {
@@ -312,6 +312,26 @@ const Api = (props) => {
         }
       }
 
+      // Handle berry consumption confirmation
+      if (messageObject.berryConsumed) {
+        console.log(`Berry consumed: ${messageObject.berryType}, health restored: ${messageObject.healthRestored}`);
+        setHealth(messageObject.newHealth);
+
+        // Update inventory by requesting sync
+        if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
+          const payload = {
+            chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+            action: "requestInventorySync",
+          };
+          websocketConnection.send(JSON.stringify(payload));
+        }
+      }
+
+      // Handle other player health updates
+      if (messageObject.playerHealthUpdate) {
+        console.log(`Player ${messageObject.playerId} health updated to ${messageObject.newHealth}`);
+        setPlayerHealth(messageObject.playerId, messageObject.newHealth);
+      }
       // Handle ground item events
       if (messageObject.type === "groundItemCreated") {
         console.log("Ground item created:", messageObject.groundItem);

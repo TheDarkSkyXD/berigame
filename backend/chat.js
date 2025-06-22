@@ -42,8 +42,6 @@ exports.handler = async function (event, context) {
   const MAX_HEALTH = 30;
 
   const handlePlayerDeath = async (connectionId, chatRoomId) => {
-    console.log(`Player ${connectionId} has died, initiating respawn...`);
-
     try {
       // 1. Get player's current inventory before death
       const playerParams = {
@@ -109,6 +107,14 @@ exports.handler = async function (event, context) {
           }
         }
 
+      const respawnMessage = {
+        type: "playerRespawn",
+        playerId: connectionId,
+        health: MAX_HEALTH,
+        position: SPAWN_LOCATION.position,
+        rotation: SPAWN_LOCATION.rotation,
+        timestamp: Date.now(),
+      };
         // Reset player's inventory and health/position
         const respawnParams = {
           TableName: process.env.DB,
@@ -129,6 +135,16 @@ exports.handler = async function (event, context) {
           },
         };
 
+      // Send death event to all players
+      for (const connection of getConnections.Items) {
+        const targetConnectionId = connection.SK.split("#")[1];
+        try {
+          await apig
+            .postToConnection({
+              ConnectionId: targetConnectionId,
+              Data: JSON.stringify(deathMessage),
+            })
+            .promise();
         await dynamodb.update(respawnParams).promise();
         console.log(`Player ${connectionId} respawned successfully, dropped ${droppedItems.length} item stacks`);
 
@@ -233,7 +249,6 @@ exports.handler = async function (event, context) {
           console.error("Couldn't get user item after deal damage:", err);
         } else {
           if (data.Item?.health <= 0) {
-            console.log(`Player ${connectionId} health dropped to ${data.Item.health}, triggering death`);
             await handlePlayerDeath(connectionId, chatRoomId);
           }
         }
@@ -243,11 +258,9 @@ exports.handler = async function (event, context) {
 
   switch (routeKey) {
     case "$connect":
-      // console.log("connected", connectionId);
       break;
 
     case "$disconnect":
-      // console.log("disconnected", connectionId);
       break;
 
     // const samplePayload = {
@@ -303,10 +316,7 @@ exports.handler = async function (event, context) {
           })
           .promise();
       } catch (e) {
-        console.log(
-          "Could not send chatroom connections to user",
-          connectionId
-        );
+        // Silently handle connection errors
       }
 
       // Send inventory state to the connecting player
@@ -335,7 +345,7 @@ exports.handler = async function (event, context) {
             })
             .promise();
         } catch (e) {
-          console.log("couldn't send inventory sync to " + connectionId, e);
+          // Silently handle connection errors
         }
       }
       break;
@@ -374,10 +384,7 @@ exports.handler = async function (event, context) {
               })
               .promise();
           } catch (e) {
-            console.log(
-              "couldn't send websocket message to " + connectionId,
-              e
-            );
+            // Silently handle connection errors
           }
         }
       } catch (e) {
@@ -400,8 +407,6 @@ exports.handler = async function (event, context) {
 
         // If position is invalid, send correction back to the client
         if (!validationResult.valid) {
-          console.log(`Position validation failed for ${connectionId}: ${validationResult.reason}`);
-
           // Send position correction to the offending client
           try {
             await apig
@@ -416,7 +421,7 @@ exports.handler = async function (event, context) {
               })
               .promise();
           } catch (e) {
-            console.log("Couldn't send position correction to " + connectionId, e);
+            // Silently handle connection errors
           }
 
           // Don't broadcast invalid position to other players
@@ -452,7 +457,7 @@ exports.handler = async function (event, context) {
               })
               .promise();
           } catch (e) {
-            // console.log("couldn't send websocket message to "+ otherConnectionId, e);
+            // Silently handle connection errors
           }
         }
       } catch (e) {
@@ -616,7 +621,6 @@ exports.handler = async function (event, context) {
           // Verify harvest has been running long enough (prevent early completion)
           const elapsedTime = currentTime - harvestStartTime;
           if (elapsedTime < (harvestDuration * 1000 - 500)) { // Allow 500ms tolerance
-            console.log(`Harvest completion attempted too early for ${connectionId}. Elapsed: ${elapsedTime}ms, Required: ${harvestDuration * 1000}ms`);
             break;
           }
 
@@ -679,7 +683,7 @@ exports.handler = async function (event, context) {
             }
           }
         } else {
-          console.log(`No active harvest found for player ${connectionId} on tree ${treeId}`);
+          // No active harvest found
         }
       } catch (e) {
         console.error("Error in manual harvest completion:", e);
@@ -733,6 +737,128 @@ exports.handler = async function (event, context) {
         }
       } catch (e) {
         console.error("Error cancelling harvest:", e);
+      }
+      break;
+
+    case "consumeBerry":
+      try {
+        const berryType = bodyAsJSON.berryType;
+
+        // Get player's current state from database
+        const playerParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+        };
+        const playerData = await dynamodb.get(playerParams).promise();
+
+        if (playerData.Item) {
+          const currentHealth = playerData.Item.health || 0;
+          const berryField = `berries_${berryType}`;
+          const berryCount = playerData.Item[berryField] || 0;
+
+          // Check if player has the berry
+          if (berryCount <= 0) {
+            break;
+          }
+
+          // Check if player can benefit from healing
+          if (currentHealth >= MAX_HEALTH) {
+            break;
+          }
+
+          // Calculate health restoration based on berry type
+          let healthRestore = 0;
+          switch (berryType) {
+            case 'blueberry':
+              healthRestore = 5;
+              break;
+            case 'strawberry':
+            case 'greenberry':
+            case 'goldberry':
+              // Placeholder for other berry types
+              healthRestore = 1;
+              break;
+            default:
+              healthRestore = 1;
+          }
+
+          // Calculate new health (don't exceed max)
+          const newHealth = Math.min(currentHealth + healthRestore, MAX_HEALTH);
+
+          // Update player's health and consume berry
+          await dynamodb
+            .update({
+              TableName: DB,
+              Key: {
+                PK: bodyAsJSON.chatRoomId,
+                SK: "CONNECTION#" + connectionId,
+              },
+              UpdateExpression: `SET health = :newHealth ADD ${berryField} :consumeVal, berries :consumeVal`,
+              ExpressionAttributeValues: {
+                ":newHealth": newHealth,
+                ":consumeVal": -1,
+              },
+            })
+            .promise();
+
+          // Berry consumed successfully
+
+          // Send health update back to the consuming player
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: connectionId,
+                Data: JSON.stringify({
+                  berryConsumed: true,
+                  berryType: berryType,
+                  healthRestored: healthRestore,
+                  newHealth: newHealth,
+                  timestamp: Date.now(),
+                }),
+              })
+              .promise();
+          } catch (e) {
+            // Silently handle connection errors
+          }
+
+          // Get all connections to broadcast health update to other players
+          const usersParams = {
+            TableName: DB,
+            KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+            ExpressionAttributeValues: {
+              ":pk": bodyAsJSON.chatRoomId,
+              ":sk": "CONNECTION#",
+            },
+          };
+          const getConnections = await dynamodb.query(usersParams).promise();
+
+          // Broadcast health update to other players
+          for (const connection of getConnections.Items) {
+            const targetConnectionId = connection.SK.split("#")[1];
+            if (targetConnectionId !== connectionId) {
+              try {
+                await apig
+                  .postToConnection({
+                    ConnectionId: targetConnectionId,
+                    Data: JSON.stringify({
+                      playerHealthUpdate: true,
+                      playerId: connectionId,
+                      newHealth: newHealth,
+                      timestamp: Date.now(),
+                    }),
+                  })
+                  .promise();
+              } catch (e) {
+                console.log("couldn't send health update to " + targetConnectionId, e);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Error consuming berry:", e);
       }
       break;
 
