@@ -17,6 +17,7 @@ provider:
     JWT_SECRET: "${self:custom.secrets.JWT_SECRET}"
     MAGIC_API_KEY: "${self:custom.secrets.MAGIC_API_KEY}"
     DB: ${self:service}-${opt:stage, self:provider.stage}
+    LOG_LEVEL: ${opt:log-level, '1'}  # 0=ERROR, 1=WARN, 2=INFO, 3=DEBUG
     APIG_ENDPOINT:
       Fn::Join:
         - ''

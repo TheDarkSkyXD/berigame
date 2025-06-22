@@ -17,18 +17,55 @@ const dynamodb = new AWS.DynamoDB.DocumentClient();
 const DB = process.env.DB;
 const positionValidator = new PositionValidator(DB);
 
+// Log levels: ERROR = 0, WARN = 1, INFO = 2, DEBUG = 3
+const LOG_LEVEL = parseInt(process.env.LOG_LEVEL) || 1; // Default to WARN level
+
+const logger = {
+  error: (message, ...args) => {
+    if (LOG_LEVEL >= 0) console.error(message, ...args);
+  },
+  warn: (message, ...args) => {
+    if (LOG_LEVEL >= 1) console.warn(message, ...args);
+  },
+  info: (message, ...args) => {
+    if (LOG_LEVEL >= 2) console.log(message, ...args);
+  },
+  debug: (message, ...args) => {
+    if (LOG_LEVEL >= 3) console.log(message, ...args);
+  }
+};
+
 // Connection caching to reduce DynamoDB queries
 const connectionCache = new Map();
+const staleConnections = new Set(); // Track connections that returned 410 errors
 const CACHE_TTL = 30000; // 30 seconds cache TTL
 const CACHE_CLEANUP_INTERVAL = 60000; // Clean up every minute
 
-// Clean up expired cache entries
+// Clean up expired cache entries and stale connections
 setInterval(() => {
   const now = Date.now();
+  let cleanedCacheCount = 0;
+  let staleConnectionsCount = staleConnections.size;
+
+  // Clean expired cache entries
   for (const [key, value] of connectionCache.entries()) {
     if (now - value.timestamp > CACHE_TTL) {
       connectionCache.delete(key);
+      cleanedCacheCount++;
     }
+  }
+
+  // Clear stale connections set periodically to allow retry of connections
+  // that might have reconnected (every 5 minutes)
+  if (now % (5 * 60 * 1000) < CACHE_CLEANUP_INTERVAL) {
+    staleConnections.clear();
+    if (staleConnectionsCount > 0) {
+      logger.debug(`🧹 Cleared ${staleConnectionsCount} stale connection entries for retry`);
+    }
+  }
+
+  if (cleanedCacheCount > 0) {
+    logger.debug(`🧹 Cleaned ${cleanedCacheCount} expired cache entries`);
   }
 }, CACHE_CLEANUP_INTERVAL);
 
@@ -47,7 +84,7 @@ async function getCachedConnections(chatRoomId, forceRefresh = false) {
     const cached = connectionCache.get(cacheKey);
     if (now - cached.timestamp < CACHE_TTL) {
       performanceMetrics.cacheHits++;
-      console.log(`💾 Cache hit for ${chatRoomId} (${cached.connections.length} connections)`);
+      logger.debug(`💾 Cache hit for ${chatRoomId} (${cached.connections.length} connections)`);
       return cached.connections;
     }
   }
@@ -55,7 +92,7 @@ async function getCachedConnections(chatRoomId, forceRefresh = false) {
   // Cache miss - query DynamoDB
   performanceMetrics.cacheMisses++;
   const queryStartTime = Date.now();
-  console.log(`🔍 Querying DynamoDB for connections in ${chatRoomId}...`);
+  logger.debug(`🔍 Querying DynamoDB for connections in ${chatRoomId}...`);
 
   const usersParams = {
     TableName: DB,
@@ -69,10 +106,10 @@ async function getCachedConnections(chatRoomId, forceRefresh = false) {
   const result = await dynamodb.query(usersParams).promise();
   const queryTime = Date.now() - queryStartTime;
 
-  console.log(`📊 DynamoDB query completed in ${queryTime}ms (${result.Items.length} connections found)`);
+  logger.debug(`📊 DynamoDB query completed in ${queryTime}ms (${result.Items.length} connections found)`);
 
   if (queryTime > 200) {
-    console.warn(`🐌 Slow DynamoDB query: ${queryTime}ms for connections in ${chatRoomId}`);
+    logger.warn(`🐌 Slow DynamoDB query: ${queryTime}ms for connections in ${chatRoomId}`);
   }
 
   // Cache the result
@@ -98,19 +135,36 @@ const performanceMetrics = {
 };
 
 /**
- * Log performance metrics periodically
+ * Log performance metrics periodically - only when there's significant activity
  */
 setInterval(() => {
-  if (performanceMetrics.totalBroadcasts > 0) {
-    console.log('Broadcasting Performance Metrics:', {
-      totalBroadcasts: performanceMetrics.totalBroadcasts,
-      averageBroadcastTime: Math.round(performanceMetrics.averageBroadcastTime),
+  const hasSignificantActivity = performanceMetrics.totalBroadcasts > 5 ||
+                                 performanceMetrics.failedConnections > 10 ||
+                                 performanceMetrics.slowBroadcasts > 0;
+
+  if (hasSignificantActivity) {
+    const cacheHitRate = performanceMetrics.cacheHits + performanceMetrics.cacheMisses > 0
+      ? Math.round((performanceMetrics.cacheHits / (performanceMetrics.cacheHits + performanceMetrics.cacheMisses)) * 100)
+      : 0;
+
+    const failureRate = performanceMetrics.totalBroadcasts > 0
+      ? Math.round((performanceMetrics.failedConnections / performanceMetrics.totalBroadcasts) * 100)
+      : 0;
+
+    logger.info('📊 Broadcasting Performance (1min):', {
+      broadcasts: performanceMetrics.totalBroadcasts,
+      avgTime: Math.round(performanceMetrics.averageBroadcastTime) + 'ms',
       slowBroadcasts: performanceMetrics.slowBroadcasts,
       failedConnections: performanceMetrics.failedConnections,
-      cacheHitRate: Math.round((performanceMetrics.cacheHits / (performanceMetrics.cacheHits + performanceMetrics.cacheMisses)) * 100),
+      failureRate: failureRate + '%',
+      cacheHitRate: cacheHitRate + '%',
+      staleConnectionsTracked: staleConnections.size
     });
 
     // Reset metrics after logging
+    Object.keys(performanceMetrics).forEach(key => performanceMetrics[key] = 0);
+  } else if (performanceMetrics.totalBroadcasts > 0) {
+    // Just reset metrics without logging for low activity periods
     Object.keys(performanceMetrics).forEach(key => performanceMetrics[key] = 0);
   }
 }, 60000); // Log every minute
@@ -124,16 +178,24 @@ setInterval(() => {
 async function broadcastToConnections(connections, message, excludeConnectionId = null) {
   const startTime = Date.now();
   let failedCount = 0;
+  let staleConnectionCount = 0;
 
-  console.log(`📡 Broadcasting to ${connections.length} connections (excluding ${excludeConnectionId || 'none'})`);
-
-  const broadcastPromises = connections.map(async (connection, index) => {
+  // Filter out known stale connections and excluded connections
+  const activeConnections = connections.filter(connection => {
     const targetConnectionId = connection.SK.split("#")[1];
-
-    // Skip excluded connection
     if (excludeConnectionId && targetConnectionId === excludeConnectionId) {
-      return;
+      return false;
     }
+    if (staleConnections.has(targetConnectionId)) {
+      return false;
+    }
+    return true;
+  });
+
+  logger.debug(`📡 Broadcasting to ${activeConnections.length}/${connections.length} connections (excluding ${excludeConnectionId || 'none'})`);
+
+  const broadcastPromises = activeConnections.map(async (connection) => {
+    const targetConnectionId = connection.SK.split("#")[1];
 
     const individualStartTime = Date.now();
     try {
@@ -143,18 +205,26 @@ async function broadcastToConnections(connections, message, excludeConnectionId 
       }).promise();
 
       const individualTime = Date.now() - individualStartTime;
-      console.log(`  ✅ Sent to ${targetConnectionId} in ${individualTime}ms`);
+      if (individualTime > 100) {
+        logger.debug(`  ✅ Sent to ${targetConnectionId} in ${individualTime}ms`);
+      }
 
     } catch (e) {
       failedCount++;
       const individualTime = Date.now() - individualStartTime;
-      console.log(`  ❌ Failed to send to ${targetConnectionId} in ${individualTime}ms:`, e.message);
 
-      // If connection is stale, remove from cache
+      // If connection is stale, track it and remove from cache
       if (e.statusCode === 410) {
-        // Connection is gone, we should refresh cache next time
+        staleConnections.add(targetConnectionId);
+        staleConnectionCount++;
         const cacheKey = `connections_${message.chatRoomId || 'unknown'}`;
         connectionCache.delete(cacheKey);
+        logger.debug(`  💀 Connection ${targetConnectionId} is stale (410)`);
+
+        // Proactively clean up stale connection from database
+        cleanupStaleConnectionFromDB(message.chatRoomId, targetConnectionId);
+      } else {
+        logger.warn(`  ❌ Failed to send to ${targetConnectionId} in ${individualTime}ms: ${e.statusCode}`);
       }
     }
   });
@@ -169,11 +239,37 @@ async function broadcastToConnections(connections, message, excludeConnectionId 
   performanceMetrics.averageBroadcastTime = performanceMetrics.totalBroadcastTime / performanceMetrics.totalBroadcasts;
   performanceMetrics.failedConnections += failedCount;
 
-  console.log(`📤 Broadcast completed: ${broadcastTime}ms total, ${failedCount} failures, ${settledResults.length} attempts`);
+  // Only log broadcast results if there are issues or it's slow
+  if (failedCount > 0 || broadcastTime > 500) {
+    logger.info(`📤 Broadcast completed: ${broadcastTime}ms total, ${failedCount} failures (${staleConnectionCount} stale), ${settledResults.length} attempts`);
+  } else {
+    logger.debug(`📤 Broadcast completed: ${broadcastTime}ms total, ${settledResults.length} successful`);
+  }
 
   if (broadcastTime > 1000) {
     performanceMetrics.slowBroadcasts++;
-    console.warn(`🐌 Slow broadcast detected: ${broadcastTime}ms for ${connections.length} connections`);
+    logger.warn(`🐌 Slow broadcast detected: ${broadcastTime}ms for ${connections.length} connections`);
+  }
+}
+
+/**
+ * Proactively clean up a stale connection from the database
+ * This runs asynchronously and doesn't block the broadcast
+ */
+async function cleanupStaleConnectionFromDB(chatRoomId, connectionId) {
+  try {
+    await dynamodb.delete({
+      TableName: DB,
+      Key: {
+        PK: chatRoomId,
+        SK: "CONNECTION#" + connectionId,
+      },
+    }).promise();
+
+    logger.debug(`🗑️ Proactively cleaned up stale connection ${connectionId} from ${chatRoomId}`);
+  } catch (error) {
+    // Don't log errors for cleanup failures as they're not critical
+    logger.debug(`Failed to cleanup stale connection ${connectionId}:`, error.message);
   }
 }
 
@@ -298,7 +394,7 @@ exports.handler = async function (event, context) {
 
       // 1. Respawn the player
       await dynamodb.update(respawnParams).promise();
-      console.log(`Player ${connectionId} respawned successfully, dropped ${droppedItems.length} item stacks`);
+      logger.info(`Player ${connectionId} respawned successfully, dropped ${droppedItems.length} item stacks`);
 
       // 2. Get all connections to broadcast death/respawn event
       const connections = await getCachedConnections(chatRoomId);
@@ -396,6 +492,47 @@ exports.handler = async function (event, context) {
       break;
 
     case "$disconnect":
+      try {
+        // Clean up user data when they disconnect
+        logger.info(`🔌 User ${connectionId} disconnecting, cleaning up...`);
+
+        // Remove from stale connections set if present
+        staleConnections.delete(connectionId);
+
+        // Find all chat rooms this connection was part of and clean up
+        const scanParams = {
+          TableName: DB,
+          FilterExpression: "SK = :sk",
+          ExpressionAttributeValues: {
+            ":sk": "CONNECTION#" + connectionId,
+          },
+        };
+
+        const scanResult = await dynamodb.scan(scanParams).promise();
+
+        for (const item of scanResult.Items) {
+          const chatRoomId = item.PK;
+
+          // Delete the connection record
+          await dynamodb.delete({
+            TableName: DB,
+            Key: {
+              PK: chatRoomId,
+              SK: "CONNECTION#" + connectionId,
+            },
+          }).promise();
+
+          // Clear cache for this chat room to force refresh
+          const cacheKey = `connections_${chatRoomId}`;
+          connectionCache.delete(cacheKey);
+
+          logger.debug(`🧹 Cleaned up connection ${connectionId} from ${chatRoomId}`);
+        }
+
+        logger.info(`✅ Cleanup completed for ${connectionId} (${scanResult.Items.length} rooms)`);
+      } catch (e) {
+        logger.error("Error during disconnect cleanup:", e);
+      }
       break;
 
     // const samplePayload = {
@@ -499,7 +636,7 @@ exports.handler = async function (event, context) {
 
         await broadcastToConnections(connections, message);
       } catch (e) {
-        console.error(e);
+        logger.error("sendMessagePublic error:", e);
       }
       break;
 
@@ -520,11 +657,13 @@ exports.handler = async function (event, context) {
           currentTimestamp
         );
         const validationTime = Date.now() - validationStartTime;
-        console.log(`⚡ [${connectionId}] Position validation took ${validationTime}ms`);
+        if (validationTime > 50) {
+          logger.debug(`⚡ [${connectionId}] Position validation took ${validationTime}ms`);
+        }
 
         // If position is invalid, send correction back to the client
         if (!validationResult.valid) {
-          console.log(`❌ [${connectionId}] Position validation failed: ${validationResult.reason}`);
+          logger.warn(`❌ [${connectionId}] Position validation failed: ${validationResult.reason}`);
           // Send position correction to the offending client
           try {
             await apig
@@ -574,18 +713,20 @@ exports.handler = async function (event, context) {
           SK: `CONNECTION#${connId}`
         }));
 
-        console.log(`📡 [${connectionId}] Broadcasting to ${connectionObjects.length} connections...`);
+        logger.debug(`📡 [${connectionId}] Broadcasting to ${connectionObjects.length} connections...`);
         // Don't exclude the attacker from receiving attack messages - they need to see damage numbers
         await broadcastToConnections(connectionObjects, bodyAsJSON.message);
 
         const broadcastTime = Date.now() - broadcastStartTime;
         const totalTime = Date.now() - caseStartTime;
 
-        console.log(`📤 [${connectionId}] Broadcast completed in ${broadcastTime}ms`);
-        console.log(`🏁 [${connectionId}] Total sendUpdate time: ${totalTime}ms (validation: ${validationTime}ms, broadcast: ${broadcastTime}ms)`);
+        if (broadcastTime > 100 || totalTime > 200) {
+          logger.debug(`📤 [${connectionId}] Broadcast completed in ${broadcastTime}ms`);
+          logger.debug(`🏁 [${connectionId}] Total sendUpdate time: ${totalTime}ms (validation: ${validationTime}ms, broadcast: ${broadcastTime}ms)`);
+        }
 
       } catch (e) {
-        console.error("SendUpdate error:", e);
+        logger.error("SendUpdate error:", e);
       }
       break;
 
@@ -767,7 +908,7 @@ exports.handler = async function (event, context) {
           // No active harvest found
         }
       } catch (e) {
-        console.error("Error in manual harvest completion:", e);
+        logger.error("Error in manual harvest completion:", e);
       }
       break;
 
@@ -800,7 +941,7 @@ exports.handler = async function (event, context) {
 
         await broadcastToConnections(connections, harvestCancelMessage);
       } catch (e) {
-        console.error("Error cancelling harvest:", e);
+        logger.error("Error cancelling harvest:", e);
       }
       break;
 
@@ -1228,10 +1369,10 @@ exports.handler = async function (event, context) {
 
         await broadcastToConnections(connections, groundItemRemovalMessage);
 
-        console.log(`Player ${connectionId} picked up ${groundItem.quantity} ${groundItem.itemSubType}`);
+        logger.debug(`Player ${connectionId} picked up ${groundItem.quantity} ${groundItem.itemSubType}`);
 
       } catch (e) {
-        console.error("Error picking up item:", e);
+        logger.error("Error picking up item:", e);
       }
       break;
   }
