@@ -254,6 +254,50 @@ export const useHarvestStore = create((set, get) => ({
   },
 }));
 
+export const useHUDStore = create((set, get) => ({
+  isVisible: true,
+  position: { x: 20, y: 20 }, // Default position
+  quickUseSlots: [null, null, null], // Three quick-use slots
+  isDragging: false,
+
+  setVisible: (isVisible) => set({ isVisible }),
+
+  setPosition: (position) => {
+    set({ position });
+    // Save to localStorage for persistence
+    localStorage.setItem('hudPosition', JSON.stringify(position));
+  },
+
+  setQuickUseSlot: (slotIndex, item) => set((state) => {
+    const newSlots = [...state.quickUseSlots];
+    newSlots[slotIndex] = item;
+    return { quickUseSlots: newSlots };
+  }),
+
+  clearQuickUseSlot: (slotIndex) => set((state) => {
+    const newSlots = [...state.quickUseSlots];
+    newSlots[slotIndex] = null;
+    return { quickUseSlots: newSlots };
+  }),
+
+  setDragging: (isDragging) => set({ isDragging }),
+
+  // Initialize position from localStorage
+  initializePosition: () => {
+    const savedPosition = localStorage.getItem('hudPosition');
+    if (savedPosition) {
+      try {
+        const position = JSON.parse(savedPosition);
+        set({ position });
+      } catch (e) {
+        console.warn('Failed to parse saved HUD position');
+      }
+    }
+  },
+
+  toggleVisibility: () => set((state) => ({ isVisible: !state.isVisible })),
+}));
+
 export const useLoadingStore = create((set, get) => ({
   isLoading: true,
   loadingProgress: 0,
