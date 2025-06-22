@@ -59,6 +59,8 @@ connectionHandler:
     - websocket:
         route: validateGameState
     - websocket:
+        route: moveInventoryItem
+    - websocket:
         route: dropItem
     - websocket:
         route: pickupItem

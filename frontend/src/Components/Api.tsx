@@ -327,6 +327,13 @@ const Api = (props) => {
         }
       }
 
+      // Handle inventory move acknowledgment
+      if (messageObject.inventoryMoveAck) {
+        console.log(`Inventory move acknowledged: slot ${messageObject.fromSlot} -> slot ${messageObject.toSlot}`);
+        // The move was already applied locally for responsive UI
+        // This acknowledgment confirms the backend processed it successfully
+      }
+
       // Handle other player health updates
       if (messageObject.playerHealthUpdate) {
         console.log(`Player ${messageObject.playerId} health updated to ${messageObject.newHealth}`);

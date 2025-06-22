@@ -1035,8 +1035,35 @@ exports.handler = async function (event, context) {
             SK: "CONNECTION#" + connectionId,
           },
         };
+		const playerData = await dynamodb.get(playerParams).promise();
+        if (playerData.Item) {
+          // For now, we'll just acknowledge the move since the current backend
+          // stores inventory as berry counts rather than slot-based items
+          // In a full implementation, we'd need to restructure the backend
+          // to support slot-based inventory management
 
-        const playerData = await dynamodb.get(playerParams).promise();
+          console.log(`Player ${connectionId} moved item from slot ${fromSlot} to slot ${toSlot}`);
+
+          // Send acknowledgment back to client
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: connectionId,
+                Data: JSON.stringify({
+                  inventoryMoveAck: true,
+                  fromSlot,
+                  toSlot,
+                  timestamp: Date.now(),
+                }),
+              })
+              .promise();
+          } catch (e) {
+            console.log("couldn't send inventory move acknowledgment to " + connectionId, e);
+          }
+        }
+      } catch (e) {
+        console.error("Error moving inventory item:", e);
+	  }
 
         if (!playerData.Item) {
           console.error("Player not found for dropItem");

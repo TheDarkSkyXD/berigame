@@ -149,6 +149,20 @@ export const webSocketRequestInventorySync = async (ws: any) => {
   }
 }
 
+export const webSocketMoveInventoryItem = async (ws: any, fromSlot: number, toSlot: number) => {
+  try {
+    const payload = {
+      chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+      action: "moveInventoryItem",
+      fromSlot,
+      toSlot,
+    }
+    ws?.send(JSON.stringify(payload));
+  } catch (e) {
+    console.error("webSocketMoveInventoryItem Error:", e);
+  }
+}
+
 export const webSocketValidateGameState = async (ws: any) => {
   try {
     const payload = {
