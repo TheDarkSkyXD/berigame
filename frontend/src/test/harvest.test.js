@@ -189,7 +189,11 @@ describe('Inventory Store', () => {
     removeItem(itemId)
 
     const newState = useInventoryStore.getState()
-    expect(newState.items).toHaveLength(0)
+    // With slot-based approach, removing an item sets it to null
+    expect(newState.items[0]).toBeNull()
+    // Check that no items remain (filter out nulls)
+    const nonNullItems = newState.items.filter(item => item !== null)
+    expect(nonNullItems).toHaveLength(0)
   })
 
   it('should clear entire inventory', () => {

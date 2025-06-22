@@ -58,3 +58,22 @@ connectionHandler:
         route: requestInventorySync
     - websocket:
         route: validateGameState
+    - websocket:
+        route: moveInventoryItem
+    - websocket:
+        route: dropItem
+    - websocket:
+        route: pickupItem
+
+#-- Cleanup functions
+cleanupStaleConnections:
+  handler: cleanup.cleanupStaleConnections
+  events:
+    - schedule: rate(5 minutes)  # Run every 5 minutes
+  timeout: 300  # 5 minutes timeout
+
+cleanupExpiredGroundItems:
+  handler: cleanup.cleanupExpiredGroundItems
+  events:
+    - schedule: rate(10 minutes)  # Run every 10 minutes
+  timeout: 300  # 5 minutes timeout

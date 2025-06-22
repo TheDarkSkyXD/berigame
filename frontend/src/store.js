@@ -53,14 +53,19 @@ export const useOtherUsersStore = create((set) => ({
       },
     })),
   addDamageToRender: (newData) =>
-    set((state) => ({
-      damageToRender: {
+    set((state) => {
+      console.log(`📝 Store: Adding damage to render for ${newData.receivingPlayer}:`, newData.damage);
+      console.log(`📝 Store: Current damageToRender state:`, state.damageToRender);
+      const newDamage = state.damageToRender[newData.receivingPlayer]
+        ? state.damageToRender[newData.receivingPlayer] + newData.damage
+        : newData.damage;
+      const newState = {
         ...state.damageToRender,
-        [newData.receivingPlayer]: state.damageToRender[newData.receivingPlayer]
-          ? state.damageToRender[newData.receivingPlayer] + newData.damage
-          : newData.damage,
-      },
-    })),
+        [newData.receivingPlayer]: newDamage,
+      };
+      console.log(`📝 Store: New damageToRender state:`, newState);
+      return { damageToRender: newState };
+    }),
   setPlayerHealth: (playerId, health) =>
     set((state) => ({
       playerHealths: {
@@ -109,12 +114,17 @@ export const useInventoryStore = create((set, get) => ({
   items: [],
   lastValidationTime: 0,
   validationInterval: 30000, // 30 seconds
+  // Drag and drop state
+  draggedItem: null,
+  draggedFromSlot: null,
+  dragOverSlot: null,
+
   addItem: (item) =>
     set((state) => {
       // Check if item already exists and can be stacked
       const existingItemIndex = state.items.findIndex(
         (existingItem) =>
-          existingItem.type === item.type &&
+          existingItem && existingItem.type === item.type &&
           existingItem.subType === item.subType
       );
 
@@ -127,28 +137,78 @@ export const useInventoryStore = create((set, get) => ({
         };
         return { items: updatedItems };
       } else {
-        // Add as new item
-        return {
-          items: [...state.items, { ...item, id: Date.now() + Math.random() }],
-        };
+        // Add as new item to first available slot
+        const newItems = [...state.items];
+        const firstEmptySlot = newItems.findIndex((slotItem) => !slotItem);
+        if (firstEmptySlot !== -1) {
+          newItems[firstEmptySlot] = { ...item, id: Date.now() + Math.random() };
+        } else {
+          newItems.push({ ...item, id: Date.now() + Math.random() });
+        }
+        return { items: newItems };
       }
     }),
+
   removeItem: (itemId) =>
     set((state) => ({
-      items: state.items.filter((item) => item.id !== itemId),
+      items: state.items.map(item => item && item.id === itemId ? null : item),
     })),
+
   clearInventory: () =>
     set(() => ({
       items: [],
     })),
+
+  // Move item from one slot to another
+  moveItem: (fromSlot, toSlot) =>
+    set((state) => {
+      if (fromSlot === toSlot) return state;
+
+      const newItems = [...state.items];
+      // Ensure array is large enough
+      while (newItems.length <= Math.max(fromSlot, toSlot)) {
+        newItems.push(null);
+      }
+
+      const itemToMove = newItems[fromSlot];
+      const itemAtDestination = newItems[toSlot];
+
+      // Swap items
+      newItems[fromSlot] = itemAtDestination;
+      newItems[toSlot] = itemToMove;
+
+      return { items: newItems };
+    }),
+
+  // Drag and drop state management
+  setDraggedItem: (item, fromSlot) =>
+    set(() => ({
+      draggedItem: item,
+      draggedFromSlot: fromSlot,
+    })),
+
+  setDragOverSlot: (slot) =>
+    set(() => ({
+      dragOverSlot: slot,
+    })),
+
+  clearDragState: () =>
+    set(() => ({
+      draggedItem: null,
+      draggedFromSlot: null,
+      dragOverSlot: null,
+    })),
+
   getItemCount: (itemType, subType) => (state) =>
     state.items
-      .filter((item) => item.type === itemType && (!subType || item.subType === subType))
+      .filter((item) => item && item.type === itemType && (!subType || item.subType === subType))
       .reduce((total, item) => total + (item.quantity || 1), 0),
+
   shouldValidate: () => {
     const state = get();
     return Date.now() - state.lastValidationTime > state.validationInterval;
   },
+
   markValidated: () =>
     set(() => ({
       lastValidationTime: Date.now(),
@@ -313,4 +373,28 @@ export const useLoadingStore = create((set, get) => ({
     loadedAssets: [],
     startTime: Date.now()
   })
+}));
+
+export const useGroundItemsStore = create((set, get) => ({
+  groundItems: [],
+
+  addGroundItem: (groundItem) =>
+    set((state) => ({
+      groundItems: [...state.groundItems, groundItem],
+    })),
+
+  removeGroundItem: (groundItemId) =>
+    set((state) => ({
+      groundItems: state.groundItems.filter((item) => item.id !== groundItemId),
+    })),
+
+  clearGroundItems: () =>
+    set(() => ({
+      groundItems: [],
+    })),
+
+  syncGroundItems: (groundItems) =>
+    set(() => ({
+      groundItems: groundItems,
+    })),
 }));

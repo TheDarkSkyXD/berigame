@@ -17,7 +17,264 @@ const dynamodb = new AWS.DynamoDB.DocumentClient();
 const DB = process.env.DB;
 const positionValidator = new PositionValidator(DB);
 
+// Log levels: ERROR = 0, WARN = 1, INFO = 2, DEBUG = 3
+const LOG_LEVEL = parseInt(process.env.LOG_LEVEL) || 1; // Default to WARN level
+
+const logger = {
+  error: (message, ...args) => {
+    if (LOG_LEVEL >= 0) console.error(message, ...args);
+  },
+  warn: (message, ...args) => {
+    if (LOG_LEVEL >= 1) console.warn(message, ...args);
+  },
+  info: (message, ...args) => {
+    if (LOG_LEVEL >= 2) console.log(message, ...args);
+  },
+  debug: (message, ...args) => {
+    if (LOG_LEVEL >= 3) console.log(message, ...args);
+  }
+};
+
+// Connection caching to reduce DynamoDB queries
+const connectionCache = new Map();
+const staleConnections = new Set(); // Track connections that returned 410 errors
+const CACHE_TTL = 30000; // 30 seconds cache TTL
+const CACHE_CLEANUP_INTERVAL = 60000; // Clean up every minute
+
+// Clean up expired cache entries and stale connections
+setInterval(() => {
+  const now = Date.now();
+  let cleanedCacheCount = 0;
+  let staleConnectionsCount = staleConnections.size;
+
+  // Clean expired cache entries
+  for (const [key, value] of connectionCache.entries()) {
+    if (now - value.timestamp > CACHE_TTL) {
+      connectionCache.delete(key);
+      cleanedCacheCount++;
+    }
+  }
+
+  // Clear stale connections set periodically to allow retry of connections
+  // that might have reconnected (every 5 minutes)
+  if (now % (5 * 60 * 1000) < CACHE_CLEANUP_INTERVAL) {
+    staleConnections.clear();
+    if (staleConnectionsCount > 0) {
+      logger.debug(`🧹 Cleared ${staleConnectionsCount} stale connection entries for retry`);
+    }
+  }
+
+  if (cleanedCacheCount > 0) {
+    logger.debug(`🧹 Cleaned ${cleanedCacheCount} expired cache entries`);
+  }
+}, CACHE_CLEANUP_INTERVAL);
+
+/**
+ * Get connections with caching to reduce DynamoDB queries
+ * @param {string} chatRoomId - The chat room ID
+ * @param {boolean} forceRefresh - Force refresh cache
+ * @returns {Promise<Array>} Array of connection items
+ */
+async function getCachedConnections(chatRoomId, forceRefresh = false) {
+  const cacheKey = `connections_${chatRoomId}`;
+  const now = Date.now();
+
+  // Check cache first
+  if (!forceRefresh && connectionCache.has(cacheKey)) {
+    const cached = connectionCache.get(cacheKey);
+    if (now - cached.timestamp < CACHE_TTL) {
+      performanceMetrics.cacheHits++;
+      logger.debug(`💾 Cache hit for ${chatRoomId} (${cached.connections.length} connections)`);
+      return cached.connections;
+    }
+  }
+
+  // Cache miss - query DynamoDB
+  performanceMetrics.cacheMisses++;
+  const queryStartTime = Date.now();
+  logger.debug(`🔍 Querying DynamoDB for connections in ${chatRoomId}...`);
+
+  const usersParams = {
+    TableName: DB,
+    KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+    ExpressionAttributeValues: {
+      ":pk": chatRoomId,
+      ":sk": "CONNECTION#",
+    },
+  };
+
+  const result = await dynamodb.query(usersParams).promise();
+  const queryTime = Date.now() - queryStartTime;
+
+  logger.debug(`📊 DynamoDB query completed in ${queryTime}ms (${result.Items.length} connections found)`);
+
+  if (queryTime > 200) {
+    logger.warn(`🐌 Slow DynamoDB query: ${queryTime}ms for connections in ${chatRoomId}`);
+  }
+
+  // Cache the result
+  connectionCache.set(cacheKey, {
+    connections: result.Items,
+    timestamp: now
+  });
+
+  return result.Items;
+}
+
+/**
+ * Performance monitoring for broadcasting
+ */
+const performanceMetrics = {
+  totalBroadcasts: 0,
+  totalBroadcastTime: 0,
+  averageBroadcastTime: 0,
+  slowBroadcasts: 0,
+  failedConnections: 0,
+  cacheHits: 0,
+  cacheMisses: 0
+};
+
+/**
+ * Log performance metrics periodically - only when there's significant activity
+ */
+setInterval(() => {
+  const hasSignificantActivity = performanceMetrics.totalBroadcasts > 5 ||
+                                 performanceMetrics.failedConnections > 10 ||
+                                 performanceMetrics.slowBroadcasts > 0;
+
+  if (hasSignificantActivity) {
+    const cacheHitRate = performanceMetrics.cacheHits + performanceMetrics.cacheMisses > 0
+      ? Math.round((performanceMetrics.cacheHits / (performanceMetrics.cacheHits + performanceMetrics.cacheMisses)) * 100)
+      : 0;
+
+    const failureRate = performanceMetrics.totalBroadcasts > 0
+      ? Math.round((performanceMetrics.failedConnections / performanceMetrics.totalBroadcasts) * 100)
+      : 0;
+
+    logger.info('📊 Broadcasting Performance (1min):', {
+      broadcasts: performanceMetrics.totalBroadcasts,
+      avgTime: Math.round(performanceMetrics.averageBroadcastTime) + 'ms',
+      slowBroadcasts: performanceMetrics.slowBroadcasts,
+      failedConnections: performanceMetrics.failedConnections,
+      failureRate: failureRate + '%',
+      cacheHitRate: cacheHitRate + '%',
+      staleConnectionsTracked: staleConnections.size
+    });
+
+    // Reset metrics after logging
+    Object.keys(performanceMetrics).forEach(key => performanceMetrics[key] = 0);
+  } else if (performanceMetrics.totalBroadcasts > 0) {
+    // Just reset metrics without logging for low activity periods
+    Object.keys(performanceMetrics).forEach(key => performanceMetrics[key] = 0);
+  }
+}, 60000); // Log every minute
+
+/**
+ * Broadcast message to all connections in parallel with performance monitoring
+ * @param {Array} connections - Array of connection items
+ * @param {Object} message - Message to broadcast
+ * @param {string} excludeConnectionId - Connection ID to exclude from broadcast
+ */
+async function broadcastToConnections(connections, message, excludeConnectionId = null) {
+  const startTime = Date.now();
+  let failedCount = 0;
+  let staleConnectionCount = 0;
+
+  // Filter out known stale connections and excluded connections
+  const activeConnections = connections.filter(connection => {
+    const targetConnectionId = connection.SK.split("#")[1];
+    if (excludeConnectionId && targetConnectionId === excludeConnectionId) {
+      return false;
+    }
+    if (staleConnections.has(targetConnectionId)) {
+      return false;
+    }
+    return true;
+  });
+
+  logger.debug(`📡 Broadcasting to ${activeConnections.length}/${connections.length} connections (excluding ${excludeConnectionId || 'none'})`);
+
+  const broadcastPromises = activeConnections.map(async (connection) => {
+    const targetConnectionId = connection.SK.split("#")[1];
+
+    const individualStartTime = Date.now();
+    try {
+      await apig.postToConnection({
+        ConnectionId: targetConnectionId,
+        Data: JSON.stringify(message),
+      }).promise();
+
+      const individualTime = Date.now() - individualStartTime;
+      if (individualTime > 100) {
+        logger.debug(`  ✅ Sent to ${targetConnectionId} in ${individualTime}ms`);
+      }
+
+    } catch (e) {
+      failedCount++;
+      const individualTime = Date.now() - individualStartTime;
+
+      // If connection is stale, track it and remove from cache
+      if (e.statusCode === 410) {
+        staleConnections.add(targetConnectionId);
+        staleConnectionCount++;
+        const cacheKey = `connections_${message.chatRoomId || 'unknown'}`;
+        connectionCache.delete(cacheKey);
+        logger.debug(`  💀 Connection ${targetConnectionId} is stale (410)`);
+
+        // Proactively clean up stale connection from database
+        cleanupStaleConnectionFromDB(message.chatRoomId, targetConnectionId);
+      } else {
+        logger.warn(`  ❌ Failed to send to ${targetConnectionId} in ${individualTime}ms: ${e.statusCode}`);
+      }
+    }
+  });
+
+  // Wait for all broadcasts to complete
+  const settledResults = await Promise.allSettled(broadcastPromises);
+
+  // Update performance metrics
+  const broadcastTime = Date.now() - startTime;
+  performanceMetrics.totalBroadcasts++;
+  performanceMetrics.totalBroadcastTime += broadcastTime;
+  performanceMetrics.averageBroadcastTime = performanceMetrics.totalBroadcastTime / performanceMetrics.totalBroadcasts;
+  performanceMetrics.failedConnections += failedCount;
+
+  // Only log broadcast results if there are issues or it's slow
+  if (failedCount > 0 || broadcastTime > 500) {
+    logger.info(`📤 Broadcast completed: ${broadcastTime}ms total, ${failedCount} failures (${staleConnectionCount} stale), ${settledResults.length} attempts`);
+  } else {
+    logger.debug(`📤 Broadcast completed: ${broadcastTime}ms total, ${settledResults.length} successful`);
+  }
+
+  if (broadcastTime > 1000) {
+    performanceMetrics.slowBroadcasts++;
+    logger.warn(`🐌 Slow broadcast detected: ${broadcastTime}ms for ${connections.length} connections`);
+  }
+}
+
+/**
+ * Proactively clean up a stale connection from the database
+ * This runs asynchronously and doesn't block the broadcast
+ */
+async function cleanupStaleConnectionFromDB(chatRoomId, connectionId) {
+  try {
+    await dynamodb.delete({
+      TableName: DB,
+      Key: {
+        PK: chatRoomId,
+        SK: "CONNECTION#" + connectionId,
+      },
+    }).promise();
+
+    logger.debug(`🗑️ Proactively cleaned up stale connection ${connectionId} from ${chatRoomId}`);
+  } catch (error) {
+    // Don't log errors for cleanup failures as they're not critical
+    logger.debug(`Failed to cleanup stale connection ${connectionId}:`, error.message);
+  }
+}
+
 exports.handler = async function (event, context) {
+  const handlerStartTime = Date.now();
   const {
     body,
     requestContext: { connectionId, routeKey, identity },
@@ -33,6 +290,14 @@ exports.handler = async function (event, context) {
     // userPK = jwt.decode(bodyAsJSON.token, process.env.JWT_SECRET).PK;
     senderId = connectionId;
   }
+
+  // Debug timing for delay analysis
+  const debugTiming = {
+    handlerStart: handlerStartTime,
+    routeKey: routeKey,
+    connectionId: connectionId,
+    bodySize: body ? body.length : 0
+  };
   // Default spawn location - center of the island
   const SPAWN_LOCATION = {
     position: { x: 0, y: 0, z: 0 },
@@ -43,14 +308,78 @@ exports.handler = async function (event, context) {
 
   const handlePlayerDeath = async (connectionId, chatRoomId) => {
     try {
-      // 1. Reset player's health and position to spawn location
+      // 1. Get player's current inventory before death
+      const playerParams = {
+        TableName: process.env.DB,
+        Key: {
+          PK: chatRoomId,
+          SK: "CONNECTION#" + connectionId,
+        },
+      };
+
+      const playerData = await dynamodb.get(playerParams).promise();
+
+      if (playerData.Item) {
+        const player = playerData.Item;
+        const deathPosition = player.lastValidPosition || SPAWN_LOCATION.position;
+
+        // Drop all inventory items at death location
+        const berryTypes = ['blueberry', 'strawberry', 'greenberry', 'goldberry'];
+        const droppedItems = [];
+
+        for (const berryType of berryTypes) {
+          const berryField = `berries_${berryType}`;
+          const quantity = player[berryField] || 0;
+
+          if (quantity > 0) {
+            // Create ground item for each berry type
+            const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+            await dynamodb.put({
+              TableName: process.env.DB,
+              Item: {
+                PK: chatRoomId,
+                SK: groundItemId,
+                itemType: 'berry',
+                itemSubType: berryType,
+                quantity,
+                position: {
+                  x: deathPosition.x + (Math.random() - 0.5) * 2, // Scatter items slightly
+                  y: deathPosition.y,
+                  z: deathPosition.z + (Math.random() - 0.5) * 2,
+                },
+                droppedBy: connectionId,
+                droppedAt: Date.now(),
+                droppedOnDeath: true,
+                ttl: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
+              },
+            }).promise();
+
+            droppedItems.push({
+              id: groundItemId,
+              itemType: 'berry',
+              itemSubType: berryType,
+              quantity,
+              position: {
+                x: deathPosition.x + (Math.random() - 0.5) * 2,
+                y: deathPosition.y,
+                z: deathPosition.z + (Math.random() - 0.5) * 2,
+              },
+              droppedBy: connectionId,
+              droppedAt: Date.now(),
+              droppedOnDeath: true,
+            });
+          }
+        }
+
+      // Reset player's inventory and health/position
       const respawnParams = {
         TableName: process.env.DB,
         Key: {
           PK: chatRoomId,
           SK: "CONNECTION#" + connectionId,
         },
-        UpdateExpression: "SET health = :health, #pos = :position, #rot = :rotation",
+        UpdateExpression: "SET health = :health, #pos = :position, #rot = :rotation, berries = :zero, berries_blueberry = :zero, berries_strawberry = :zero, berries_greenberry = :zero, berries_goldberry = :zero",
         ExpressionAttributeNames: {
           "#pos": "position",
           "#rot": "rotation"
@@ -59,29 +388,25 @@ exports.handler = async function (event, context) {
           ":health": MAX_HEALTH,
           ":position": SPAWN_LOCATION.position,
           ":rotation": SPAWN_LOCATION.rotation,
+          ":zero": 0,
         },
       };
 
+      // 1. Respawn the player
       await dynamodb.update(respawnParams).promise();
+      logger.info(`Player ${connectionId} respawned successfully, dropped ${droppedItems.length} item stacks`);
 
       // 2. Get all connections to broadcast death/respawn event
-      const usersParams = {
-        TableName: process.env.DB,
-        KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-        ExpressionAttributeValues: {
-          ":pk": chatRoomId,
-          ":sk": "CONNECTION#",
-        },
-      };
+      const connections = await getCachedConnections(chatRoomId);
 
-      const getConnections = await dynamodb.query(usersParams).promise();
-
-      // 3. Broadcast death/respawn event to all connected players
+      // 3. Broadcast death/respawn event and dropped items to all connected players
       const deathMessage = {
         type: "playerDeath",
         deadPlayerId: connectionId,
         respawnLocation: SPAWN_LOCATION,
+        droppedItems: droppedItems,
         timestamp: Date.now(),
+        chatRoomId: chatRoomId,
       };
 
       const respawnMessage = {
@@ -91,29 +416,26 @@ exports.handler = async function (event, context) {
         position: SPAWN_LOCATION.position,
         rotation: SPAWN_LOCATION.rotation,
         timestamp: Date.now(),
+        chatRoomId: chatRoomId,
       };
 
-      // Send death event to all players
-      for (const connection of getConnections.Items) {
-        const targetConnectionId = connection.SK.split("#")[1];
-        try {
-          await apig
-            .postToConnection({
-              ConnectionId: targetConnectionId,
-              Data: JSON.stringify(deathMessage),
-            })
-            .promise();
+      // Broadcast death and respawn events in parallel
+      await Promise.all([
+        broadcastToConnections(connections, deathMessage),
+        broadcastToConnections(connections, respawnMessage)
+      ]);
 
-          // Send respawn event immediately after death event
-          await apig
-            .postToConnection({
-              ConnectionId: targetConnectionId,
-              Data: JSON.stringify(respawnMessage),
-            })
-            .promise();
-        } catch (e) {
-          // Silently handle connection errors
-        }
+      // Broadcast ground item creation events for each dropped item
+      const groundItemPromises = droppedItems.map(droppedItem =>
+        broadcastToConnections(connections, {
+          type: "groundItemCreated",
+          groundItem: droppedItem,
+          timestamp: Date.now(),
+          chatRoomId: chatRoomId,
+        })
+      );
+
+      await Promise.all(groundItemPromises);
       }
 
     } catch (error) {
@@ -121,7 +443,7 @@ exports.handler = async function (event, context) {
     }
   };
 
-  const dealDamage = (connectionId, damage, chatRoomId) => {
+  const dealDamage = async (connectionId, damage, chatRoomId) => {
     const rowParams = {
       TableName: process.env.DB,
       Key: {
@@ -132,28 +454,37 @@ exports.handler = async function (event, context) {
       ExpressionAttributeValues: {
         ":val": damage,
       },
+      ReturnValues: "ALL_NEW"
     };
 
-    dynamodb.update(rowParams, (e, data) => {
-      if (e) {
-        console.error(
-          "Unable to update item. Error JSON:",
-          JSON.stringify(e, null, 2)
-        );
-        return;
-      }
+    try {
+      const updateResult = await dynamodb.update(rowParams).promise();
+      const newHealth = updateResult.Attributes.health;
+
+      console.log(`Player ${connectionId} took ${damage} damage, new health: ${newHealth}`);
+
+      // Broadcast health update to all players
+      const connections = await getCachedConnections(chatRoomId);
+      const healthUpdateMessage = {
+        playerHealthUpdate: true,
+        playerId: connectionId,
+        newHealth: newHealth,
+        timestamp: Date.now(),
+        chatRoomId: chatRoomId,
+      };
+
+      await broadcastToConnections(connections, healthUpdateMessage);
 
       // Check for death after dealing damage
-      dynamodb.get(rowParams, async (err, data) => {
-        if (err) {
-          console.error("Couldn't get user item after deal damage:", err);
-        } else {
-          if (data.Item?.health <= 0) {
-            await handlePlayerDeath(connectionId, chatRoomId);
-          }
-        }
-      });
-    });
+      if (newHealth <= 0) {
+        await handlePlayerDeath(connectionId, chatRoomId);
+      }
+    } catch (e) {
+      console.error(
+        "Unable to update item. Error JSON:",
+        JSON.stringify(e, null, 2)
+      );
+    }
   };
 
   switch (routeKey) {
@@ -161,6 +492,47 @@ exports.handler = async function (event, context) {
       break;
 
     case "$disconnect":
+      try {
+        // Clean up user data when they disconnect
+        logger.info(`🔌 User ${connectionId} disconnecting, cleaning up...`);
+
+        // Remove from stale connections set if present
+        staleConnections.delete(connectionId);
+
+        // Find all chat rooms this connection was part of and clean up
+        const scanParams = {
+          TableName: DB,
+          FilterExpression: "SK = :sk",
+          ExpressionAttributeValues: {
+            ":sk": "CONNECTION#" + connectionId,
+          },
+        };
+
+        const scanResult = await dynamodb.scan(scanParams).promise();
+
+        for (const item of scanResult.Items) {
+          const chatRoomId = item.PK;
+
+          // Delete the connection record
+          await dynamodb.delete({
+            TableName: DB,
+            Key: {
+              PK: chatRoomId,
+              SK: "CONNECTION#" + connectionId,
+            },
+          }).promise();
+
+          // Clear cache for this chat room to force refresh
+          const cacheKey = `connections_${chatRoomId}`;
+          connectionCache.delete(cacheKey);
+
+          logger.debug(`🧹 Cleaned up connection ${connectionId} from ${chatRoomId}`);
+        }
+
+        logger.info(`✅ Cleanup completed for ${connectionId} (${scanResult.Items.length} rooms)`);
+      } catch (e) {
+        logger.error("Error during disconnect cleanup:", e);
+      }
       break;
 
     // const samplePayload = {
@@ -196,22 +568,14 @@ exports.handler = async function (event, context) {
         })
         .promise();
       //Get all connectionIDs associated with chatroom to send back to user
-      const usersParams = {
-        TableName: process.env.DB,
-        KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-        ExpressionAttributeValues: {
-          ":pk": bodyAsJSON.chatRoomId,
-          ":sk": "CONNECTION#",
-        },
-      };
-      const getConnections = await dynamodb.query(usersParams).promise();
+      const getConnections = await getCachedConnections(bodyAsJSON.chatRoomId, true); // Force refresh on connect
       try {
         await apig
           .postToConnection({
             ConnectionId: connectionId,
             Data: JSON.stringify({
               yourConnectionId: senderId,
-              connections: getConnections.Items,
+              connections: getConnections,
             }),
           })
           .promise();
@@ -220,7 +584,7 @@ exports.handler = async function (event, context) {
       }
 
       // Send inventory state to the connecting player
-      const playerConnection = getConnections.Items.find(
+      const playerConnection = getConnections.find(
         conn => conn.SK === "CONNECTION#" + connectionId
       );
 
@@ -259,54 +623,47 @@ exports.handler = async function (event, context) {
     case "sendMessagePublic":
       try {
         //Get all connectionIDs associated with chatroom
-        const usersParams = {
-          TableName: process.env.DB,
-          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-          ExpressionAttributeValues: {
-            ":pk": bodyAsJSON.chatRoomId,
-            ":sk": "CONNECTION#",
-          },
+        const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
+
+        //Send message to socket connections in parallel
+        const message = {
+          message: bodyAsJSON.message,
+          senderId,
+          chatMessage: true,
+          timestamp: Date.now(),
+          chatRoomId: bodyAsJSON.chatRoomId,
         };
-        const getConnections = await dynamodb.query(usersParams).promise();
-        //Send message to socket connections
-        for (const connection of getConnections.Items) {
-          const connectionId = connection.SK.split("#")[1];
-          try {
-            await apig
-              .postToConnection({
-                ConnectionId: connectionId,
-                Data: JSON.stringify({
-                  message: bodyAsJSON.message,
-                  senderId,
-                  chatMessage: true,
-                  timestamp: Date.now(),
-                }),
-              })
-              .promise();
-          } catch (e) {
-            // Silently handle connection errors
-          }
-        }
+
+        await broadcastToConnections(connections, message);
       } catch (e) {
-        console.error(e);
+        logger.error("sendMessagePublic error:", e);
       }
       break;
 
     case "sendUpdate": //TODO: rename to send update
       try {
+        const caseStartTime = Date.now();
         const currentTimestamp = Date.now();
         const incomingPosition = bodyAsJSON.message.position;
 
+        console.log(`🔍 [${connectionId}] SendUpdate started at ${caseStartTime}`);
+
         // Validate position update
+        const validationStartTime = Date.now();
         const validationResult = await positionValidator.validatePositionUpdate(
           connectionId,
           bodyAsJSON.chatRoomId,
           incomingPosition,
           currentTimestamp
         );
+        const validationTime = Date.now() - validationStartTime;
+        if (validationTime > 50) {
+          logger.debug(`⚡ [${connectionId}] Position validation took ${validationTime}ms`);
+        }
 
         // If position is invalid, send correction back to the client
         if (!validationResult.valid) {
+          logger.warn(`❌ [${connectionId}] Position validation failed: ${validationResult.reason}`);
           // Send position correction to the offending client
           try {
             await apig
@@ -342,26 +699,34 @@ exports.handler = async function (event, context) {
             receivingPlayer: attackingPlayer,
             damage,
           };
-          dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+          await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
         }
 
-        // Broadcast validated position to other players
-        for (const otherConnectionId of bodyAsJSON.connections) {
-          bodyAsJSON.message.connectionId = connectionId;
-          bodyAsJSON.message.userId = senderId;
-          try {
-            await apig
-              .postToConnection({
-                ConnectionId: otherConnectionId,
-                Data: JSON.stringify(bodyAsJSON.message),
-              })
-              .promise();
-          } catch (e) {
-            // Silently handle connection errors
-          }
+        // Broadcast validated position to other players in parallel
+        const broadcastStartTime = Date.now();
+        bodyAsJSON.message.connectionId = connectionId;
+        bodyAsJSON.message.userId = senderId;
+        bodyAsJSON.message.chatRoomId = bodyAsJSON.chatRoomId;
+
+        // Create connection objects from connection IDs for broadcasting
+        const connectionObjects = bodyAsJSON.connections.map(connId => ({
+          SK: `CONNECTION#${connId}`
+        }));
+
+        logger.debug(`📡 [${connectionId}] Broadcasting to ${connectionObjects.length} connections...`);
+        // Don't exclude the attacker from receiving attack messages - they need to see damage numbers
+        await broadcastToConnections(connectionObjects, bodyAsJSON.message);
+
+        const broadcastTime = Date.now() - broadcastStartTime;
+        const totalTime = Date.now() - caseStartTime;
+
+        if (broadcastTime > 100 || totalTime > 200) {
+          logger.debug(`📤 [${connectionId}] Broadcast completed in ${broadcastTime}ms`);
+          logger.debug(`🏁 [${connectionId}] Total sendUpdate time: ${totalTime}ms (validation: ${validationTime}ms, broadcast: ${broadcastTime}ms)`);
         }
+
       } catch (e) {
-        console.error("SendUpdate error:", e);
+        logger.error("SendUpdate error:", e);
       }
       break;
 
@@ -389,37 +754,20 @@ exports.handler = async function (event, context) {
           .promise();
 
         // Get all connections to broadcast harvest start
-        const usersParams = {
-          TableName: DB,
-          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-          ExpressionAttributeValues: {
-            ":pk": bodyAsJSON.chatRoomId,
-            ":sk": "CONNECTION#",
-          },
-        };
-        const getConnections = await dynamodb.query(usersParams).promise();
+        const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
 
-        // Broadcast harvest started to all players
-        for (const connection of getConnections.Items) {
-          const targetConnectionId = connection.SK.split("#")[1];
-          try {
-            await apig
-              .postToConnection({
-                ConnectionId: targetConnectionId,
-                Data: JSON.stringify({
-                  harvestStarted: true,
-                  treeId,
-                  berryType,
-                  playerId: connectionId,
-                  duration: harvestDuration,
-                  timestamp: Date.now(),
-                }),
-              })
-              .promise();
-          } catch (e) {
-            console.log("couldn't send harvest start message to " + targetConnectionId, e);
-          }
-        }
+        // Broadcast harvest started to all players in parallel
+        const harvestStartMessage = {
+          harvestStarted: true,
+          treeId,
+          berryType,
+          playerId: connectionId,
+          duration: harvestDuration,
+          timestamp: Date.now(),
+          chatRoomId: bodyAsJSON.chatRoomId,
+        };
+
+        await broadcastToConnections(connections, harvestStartMessage);
 
         // Schedule harvest completion
         setTimeout(async () => {
@@ -465,27 +813,18 @@ exports.handler = async function (event, context) {
                 })
                 .promise();
 
-              // Broadcast harvest completion
-              const getConnectionsForCompletion = await dynamodb.query(usersParams).promise();
-              for (const connection of getConnectionsForCompletion.Items) {
-                const targetConnectionId = connection.SK.split("#")[1];
-                try {
-                  await apig
-                    .postToConnection({
-                      ConnectionId: targetConnectionId,
-                      Data: JSON.stringify({
-                        harvestCompleted: true,
-                        treeId,
-                        berryType: harvestBerryType,
-                        playerId: connectionId,
-                        timestamp: Date.now(),
-                      }),
-                    })
-                    .promise();
-                } catch (e) {
-                  console.log("couldn't send harvest completion message to " + targetConnectionId, e);
-                }
-              }
+              // Broadcast harvest completion in parallel
+              const connectionsForCompletion = await getCachedConnections(bodyAsJSON.chatRoomId);
+              const harvestCompleteMessage = {
+                harvestCompleted: true,
+                treeId,
+                berryType: harvestBerryType,
+                playerId: connectionId,
+                timestamp: Date.now(),
+                chatRoomId: bodyAsJSON.chatRoomId,
+              };
+
+              await broadcastToConnections(connectionsForCompletion, harvestCompleteMessage);
             }
           } catch (e) {
             console.error("Error completing harvest:", e);
@@ -552,41 +891,24 @@ exports.handler = async function (event, context) {
             .promise();
 
           // Get all connections to broadcast completion
-          const usersParams = {
-            TableName: DB,
-            KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-            ExpressionAttributeValues: {
-              ":pk": bodyAsJSON.chatRoomId,
-              ":sk": "CONNECTION#",
-            },
-          };
-          const getConnections = await dynamodb.query(usersParams).promise();
+          const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
 
-          // Broadcast harvest completion
-          for (const connection of getConnections.Items) {
-            const targetConnectionId = connection.SK.split("#")[1];
-            try {
-              await apig
-                .postToConnection({
-                  ConnectionId: targetConnectionId,
-                  Data: JSON.stringify({
-                    harvestCompleted: true,
-                    treeId,
-                    berryType: harvestBerryType,
-                    playerId: connectionId,
-                    timestamp: Date.now(),
-                  }),
-                })
-                .promise();
-            } catch (e) {
-              console.log("couldn't send harvest completion message to " + targetConnectionId, e);
-            }
-          }
+          // Broadcast harvest completion in parallel
+          const harvestCompleteMessage = {
+            harvestCompleted: true,
+            treeId,
+            berryType: harvestBerryType,
+            playerId: connectionId,
+            timestamp: Date.now(),
+            chatRoomId: bodyAsJSON.chatRoomId,
+          };
+
+          await broadcastToConnections(connections, harvestCompleteMessage);
         } else {
           // No active harvest found
         }
       } catch (e) {
-        console.error("Error in manual harvest completion:", e);
+        logger.error("Error in manual harvest completion:", e);
       }
       break;
 
@@ -606,37 +928,20 @@ exports.handler = async function (event, context) {
           .promise();
 
         // Get all connections to broadcast cancellation
-        const usersParams = {
-          TableName: DB,
-          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-          ExpressionAttributeValues: {
-            ":pk": bodyAsJSON.chatRoomId,
-            ":sk": "CONNECTION#",
-          },
-        };
-        const getConnections = await dynamodb.query(usersParams).promise();
+        const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
 
-        // Broadcast harvest cancellation
-        for (const connection of getConnections.Items) {
-          const targetConnectionId = connection.SK.split("#")[1];
-          try {
-            await apig
-              .postToConnection({
-                ConnectionId: targetConnectionId,
-                Data: JSON.stringify({
-                  harvestCancelled: true,
-                  treeId,
-                  playerId: connectionId,
-                  timestamp: Date.now(),
-                }),
-              })
-              .promise();
-          } catch (e) {
-            console.log("couldn't send harvest cancellation message to " + targetConnectionId, e);
-          }
-        }
+        // Broadcast harvest cancellation in parallel
+        const harvestCancelMessage = {
+          harvestCancelled: true,
+          treeId,
+          playerId: connectionId,
+          timestamp: Date.now(),
+          chatRoomId: bodyAsJSON.chatRoomId,
+        };
+
+        await broadcastToConnections(connections, harvestCancelMessage);
       } catch (e) {
-        console.error("Error cancelling harvest:", e);
+        logger.error("Error cancelling harvest:", e);
       }
       break;
 
@@ -661,11 +966,6 @@ exports.handler = async function (event, context) {
 
           // Check if player has the berry
           if (berryCount <= 0) {
-            break;
-          }
-
-          // Check if player can benefit from healing
-          if (currentHealth >= MAX_HEALTH) {
             break;
           }
 
@@ -725,37 +1025,18 @@ exports.handler = async function (event, context) {
           }
 
           // Get all connections to broadcast health update to other players
-          const usersParams = {
-            TableName: DB,
-            KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-            ExpressionAttributeValues: {
-              ":pk": bodyAsJSON.chatRoomId,
-              ":sk": "CONNECTION#",
-            },
-          };
-          const getConnections = await dynamodb.query(usersParams).promise();
+          const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
 
-          // Broadcast health update to other players
-          for (const connection of getConnections.Items) {
-            const targetConnectionId = connection.SK.split("#")[1];
-            if (targetConnectionId !== connectionId) {
-              try {
-                await apig
-                  .postToConnection({
-                    ConnectionId: targetConnectionId,
-                    Data: JSON.stringify({
-                      playerHealthUpdate: true,
-                      playerId: connectionId,
-                      newHealth: newHealth,
-                      timestamp: Date.now(),
-                    }),
-                  })
-                  .promise();
-              } catch (e) {
-                console.log("couldn't send health update to " + targetConnectionId, e);
-              }
-            }
-          }
+          // Broadcast health update to other players in parallel
+          const healthUpdateMessage = {
+            playerHealthUpdate: true,
+            playerId: connectionId,
+            newHealth: newHealth,
+            timestamp: Date.now(),
+            chatRoomId: bodyAsJSON.chatRoomId,
+          };
+
+          await broadcastToConnections(connections, healthUpdateMessage, connectionId);
         }
       } catch (e) {
         console.error("Error consuming berry:", e);
@@ -873,6 +1154,17 @@ exports.handler = async function (event, context) {
           harvest => harvest.playerId === connectionId
         );
 
+        // Get all ground items in the chatroom
+        const groundItemParams = {
+          TableName: DB,
+          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+          ExpressionAttributeValues: {
+            ":pk": bodyAsJSON.chatRoomId,
+            ":sk": "GROUND_ITEM#",
+          },
+        };
+        const groundItemData = await dynamodb.query(groundItemParams).promise();
+
         if (playerData.Item) {
           const gameState = {
             inventory: {
@@ -888,6 +1180,16 @@ exports.handler = async function (event, context) {
               startTime: harvest.startTime,
               duration: harvest.duration,
               playerId: harvest.playerId,
+            })),
+            groundItems: groundItemData.Items.map(item => ({
+              id: item.SK,
+              itemType: item.itemType,
+              itemSubType: item.itemSubType,
+              quantity: item.quantity,
+              position: item.position,
+              droppedBy: item.droppedBy,
+              droppedAt: item.droppedAt,
+              droppedOnDeath: item.droppedOnDeath || false,
             })),
             health: playerData.Item.health || 30,
             position: playerData.Item.lastValidPosition || { x: 0, y: 0, z: 0 },
@@ -911,6 +1213,166 @@ exports.handler = async function (event, context) {
         }
       } catch (e) {
         console.error("Error validating game state:", e);
+      }
+      break;
+
+    case "dropItem":
+      try {
+        const { itemType, itemSubType, quantity = 1, position } = bodyAsJSON;
+
+        if (!itemType || !position) {
+          console.error("Missing required fields for dropItem");
+          break;
+        }
+
+        // Get player's current inventory
+        const playerParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+        };
+        const playerData = await dynamodb.get(playerParams).promise();
+
+        if (!playerData.Item) {
+          console.error("Player not found for dropItem");
+          break;
+        }
+
+        // Check if player has the item to drop
+        const berryField = `berries_${itemSubType}`;
+        const currentQuantity = playerData.Item[berryField] || 0;
+
+        if (currentQuantity < quantity) {
+          console.error(`Player doesn't have enough ${itemSubType} to drop`);
+          break;
+        }
+
+        // Remove item from player's inventory
+        await dynamodb.update({
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+          UpdateExpression: `ADD ${berryField} :negQuantity, berries :negQuantity`,
+          ExpressionAttributeValues: {
+            ":negQuantity": -quantity,
+          },
+        }).promise();
+
+        // Create ground item
+        const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await dynamodb.put({
+          TableName: DB,
+          Item: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: groundItemId,
+            itemType,
+            itemSubType,
+            quantity,
+            position,
+            droppedBy: connectionId,
+            droppedAt: Date.now(),
+            ttl: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
+          },
+        }).promise();
+
+        // Broadcast ground item creation to all players in parallel
+        const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
+
+        const groundItemMessage = {
+          type: "groundItemCreated",
+          groundItem: {
+            id: groundItemId,
+            itemType,
+            itemSubType,
+            quantity,
+            position,
+            droppedBy: connectionId,
+            droppedAt: Date.now(),
+          },
+          timestamp: Date.now(),
+          chatRoomId: bodyAsJSON.chatRoomId,
+        };
+
+        await broadcastToConnections(connections, groundItemMessage);
+
+        console.log(`Player ${connectionId} dropped ${quantity} ${itemSubType} at position`, position);
+
+      } catch (e) {
+        console.error("Error dropping item:", e);
+      }
+      break;
+
+    case "pickupItem":
+      try {
+        const { groundItemId } = bodyAsJSON;
+
+        if (!groundItemId) {
+          console.error("Missing groundItemId for pickupItem");
+          break;
+        }
+
+        // Get ground item
+        const groundItemParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: groundItemId,
+          },
+        };
+
+        const groundItemData = await dynamodb.get(groundItemParams).promise();
+
+        if (!groundItemData.Item) {
+          console.error("Ground item not found for pickup");
+          break;
+        }
+
+        const groundItem = groundItemData.Item;
+
+        // Add item to player's inventory
+        const berryField = `berries_${groundItem.itemSubType}`;
+        await dynamodb.update({
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+          UpdateExpression: `ADD ${berryField} :quantity, berries :quantity`,
+          ExpressionAttributeValues: {
+            ":quantity": groundItem.quantity,
+          },
+        }).promise();
+
+        // Remove ground item
+        await dynamodb.delete({
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: groundItemId,
+          },
+        }).promise();
+
+        // Broadcast ground item removal to all players in parallel
+        const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
+
+        const groundItemRemovalMessage = {
+          type: "groundItemRemoved",
+          groundItemId,
+          pickedUpBy: connectionId,
+          timestamp: Date.now(),
+          chatRoomId: bodyAsJSON.chatRoomId,
+        };
+
+        await broadcastToConnections(connections, groundItemRemovalMessage);
+
+        logger.debug(`Player ${connectionId} picked up ${groundItem.quantity} ${groundItem.itemSubType}`);
+
+      } catch (e) {
+        logger.error("Error picking up item:", e);
       }
       break;
   }

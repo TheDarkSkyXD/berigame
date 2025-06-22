@@ -6,6 +6,7 @@ import {
   useWebsocketStore,
   useHarvestStore,
   useInventoryStore,
+  useGroundItemsStore,
 } from "../store";
 import { connectToChatRoom } from "../Api";
 
@@ -55,6 +56,10 @@ const Api = (props) => {
   );
   const setHealth = useUserStateStore((state: any) => state.setHealth);
   const setPositionCorrection = useUserStateStore((state: any) => state.setPositionCorrection);
+  const addGroundItem = useGroundItemsStore((state: any) => state.addGroundItem);
+  const removeGroundItem = useGroundItemsStore((state: any) => state.removeGroundItem);
+  const clearGroundItems = useGroundItemsStore((state: any) => state.clearGroundItems);
+  const syncGroundItems = useGroundItemsStore((state: any) => state.syncGroundItems);
 
   if (process.env.NODE_ENV === "development") {
     url = "http://localhost:3000/dev/";
@@ -120,8 +125,11 @@ const Api = (props) => {
 
       if (messageObject.position && messageObject.userId) {
         updateUserPosition(messageObject);
-        if (messageObject.attackingPlayer)
+        if (messageObject.attackingPlayer && messageObject.damageGiven) {
+          // Process damage to show on the target player
+          // Everyone should see damage numbers on the target (including the target themselves)
           addDamageToRender(messageObject.damageGiven);
+        }
       }
 
       if (messageObject.connections) {
@@ -170,28 +178,78 @@ const Api = (props) => {
           goldberry: { name: 'Goldberry', icon: '/goldberry.svg' },
         };
 
-        // Clear existing inventory and sync with backend state
+        // Smart inventory sync that preserves item positions
         const { items } = useInventoryStore.getState();
-        items.forEach(item => {
-          if (item.id) {
-            removeItem(item.id);
+        const currentItems = [...items]; // Create a copy to work with
+
+        // Update existing berry quantities and remove excess
+        Object.keys(berryConfigs).forEach(berryType => {
+          const backendCount = inventory[`berries_${berryType}`] || 0;
+          const config = berryConfigs[berryType];
+
+          // Find all existing berries of this type
+          const existingBerries = [];
+          currentItems.forEach((item, index) => {
+            if (item && item.type === 'berry' && item.subType === berryType) {
+              existingBerries.push({ item, index });
+            }
+          });
+
+          // Calculate current total quantity
+          const currentTotal = existingBerries.reduce((sum, berry) => sum + (berry.item.quantity || 1), 0);
+
+          if (backendCount === 0) {
+            // Remove all berries of this type
+            existingBerries.forEach(berry => {
+              currentItems[berry.index] = null;
+            });
+          } else if (currentTotal !== backendCount) {
+            // Adjust quantities to match backend
+            if (existingBerries.length === 0) {
+              // No existing berries, add new ones to first available slot
+              const firstEmptySlot = currentItems.findIndex(item => !item);
+              if (firstEmptySlot !== -1) {
+                currentItems[firstEmptySlot] = {
+                  type: "berry",
+                  subType: berryType,
+                  name: config.name,
+                  icon: config.icon,
+                  quantity: backendCount,
+                  id: Date.now() + Math.random()
+                };
+              }
+            } else {
+              // Update existing berry quantities
+              let remainingCount = backendCount;
+
+              existingBerries.forEach((berry, berryIndex) => {
+                if (remainingCount > 0) {
+                  const assignedQuantity = Math.min(remainingCount, berry.item.quantity || 1);
+                  currentItems[berry.index] = {
+                    ...berry.item,
+                    quantity: assignedQuantity
+                  };
+                  remainingCount -= assignedQuantity;
+                } else {
+                  // Remove excess berries
+                  currentItems[berry.index] = null;
+                }
+              });
+
+              // If we still have remaining count, update the first berry stack
+              if (remainingCount > 0 && existingBerries.length > 0) {
+                const firstBerry = existingBerries[0];
+                currentItems[firstBerry.index] = {
+                  ...firstBerry.item,
+                  quantity: backendCount
+                };
+              }
+            }
           }
         });
 
-        // Add berries from backend inventory
-        Object.keys(berryConfigs).forEach(berryType => {
-          const count = inventory[`berries_${berryType}`] || 0;
-          if (count > 0) {
-            const config = berryConfigs[berryType];
-            addItem({
-              type: "berry",
-              subType: berryType,
-              name: config.name,
-              icon: config.icon,
-              quantity: count,
-            });
-          }
-        });
+        // Update the inventory store with the modified items
+        useInventoryStore.setState({ items: currentItems });
 
         const messageType = messageObject.inventoryValidation ? 'validated' : 'synchronized';
         console.log(`Inventory ${messageType} with backend:`, inventory);
@@ -219,21 +277,60 @@ const Api = (props) => {
           goldberry: { name: 'Goldberry', icon: '/goldberry.svg' },
         };
 
-        // Clear and rebuild inventory
-        clearInventory();
+        // Smart inventory sync for game state validation
+        const { items: currentItems } = useInventoryStore.getState();
+        const updatedItems = [...currentItems];
+
+        // Update berry quantities to match game state
         Object.keys(berryConfigs).forEach(berryType => {
-          const count = gameState.inventory[`berries_${berryType}`] || 0;
-          if (count > 0) {
-            const config = berryConfigs[berryType];
-            addItem({
-              type: "berry",
-              subType: berryType,
-              name: config.name,
-              icon: config.icon,
-              quantity: count,
+          const backendCount = gameState.inventory[`berries_${berryType}`] || 0;
+          const config = berryConfigs[berryType];
+
+          // Find existing berries of this type
+          const existingBerries = [];
+          updatedItems.forEach((item, index) => {
+            if (item && item.type === 'berry' && item.subType === berryType) {
+              existingBerries.push({ item, index });
+            }
+          });
+
+          const currentTotal = existingBerries.reduce((sum, berry) => sum + (berry.item.quantity || 1), 0);
+
+          if (backendCount === 0) {
+            // Remove all berries of this type
+            existingBerries.forEach(berry => {
+              updatedItems[berry.index] = null;
             });
+          } else if (currentTotal !== backendCount) {
+            if (existingBerries.length === 0) {
+              // Add new berries to first available slot
+              const firstEmptySlot = updatedItems.findIndex(item => !item);
+              if (firstEmptySlot !== -1) {
+                updatedItems[firstEmptySlot] = {
+                  type: "berry",
+                  subType: berryType,
+                  name: config.name,
+                  icon: config.icon,
+                  quantity: backendCount,
+                  id: Date.now() + Math.random()
+                };
+              }
+            } else {
+              // Update first berry stack with correct quantity
+              updatedItems[existingBerries[0].index] = {
+                ...existingBerries[0].item,
+                quantity: backendCount
+              };
+              // Remove other stacks of the same berry type
+              for (let i = 1; i < existingBerries.length; i++) {
+                updatedItems[existingBerries[i].index] = null;
+              }
+            }
           }
         });
+
+        // Update inventory store
+        useInventoryStore.setState({ items: updatedItems });
 
         // Sync harvest states
         const { activeHarvests, cancelHarvest, startHarvest } = useHarvestStore.getState();
@@ -258,6 +355,12 @@ const Api = (props) => {
             }
           }
         });
+
+        // Sync ground items
+        if (gameState.groundItems) {
+          console.log(`Syncing ${gameState.groundItems.length} ground items`);
+          syncGroundItems(gameState.groundItems);
+        }
 
         // Update health if different
         const currentHealth = useUserStateStore.getState().health;
@@ -316,10 +419,31 @@ const Api = (props) => {
         }
       }
 
+      // Handle inventory move acknowledgment
+      if (messageObject.inventoryMoveAck) {
+        console.log(`Inventory move acknowledged: slot ${messageObject.fromSlot} -> slot ${messageObject.toSlot}`);
+        // The move was already applied locally for responsive UI
+        // This acknowledgment confirms the backend processed it successfully
+      }
+
       // Handle other player health updates
       if (messageObject.playerHealthUpdate) {
-        console.log(`Player ${messageObject.playerId} health updated to ${messageObject.newHealth}`);
-        setPlayerHealth(messageObject.playerId, messageObject.newHealth);
+        // Update health for all players (including self for consistency)
+        if (messageObject.playerId === userConnectionId) {
+          // Update own health from backend
+          setHealth(messageObject.newHealth);
+        } else {
+          // Update other player's health
+          setPlayerHealth(messageObject.playerId, messageObject.newHealth);
+        }
+      }
+      // Handle ground item events
+      if (messageObject.type === "groundItemCreated") {
+        addGroundItem(messageObject.groundItem);
+      }
+
+      if (messageObject.type === "groundItemRemoved") {
+        removeGroundItem(messageObject.groundItemId);
       }
     }
   };
@@ -335,6 +459,9 @@ const Api = (props) => {
 
     // Clear inventory on connection error to prevent stale state
     clearInventory();
+
+    // Clear ground items on connection error
+    clearGroundItems();
 
     // Cancel any active harvests on error
     const { activeHarvests, cancelHarvest } = useHarvestStore.getState();

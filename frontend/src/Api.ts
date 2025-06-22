@@ -149,6 +149,20 @@ export const webSocketRequestInventorySync = async (ws: any) => {
   }
 }
 
+export const webSocketMoveInventoryItem = async (ws: any, fromSlot: number, toSlot: number) => {
+  try {
+    const payload = {
+      chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+      action: "moveInventoryItem",
+      fromSlot,
+      toSlot,
+    }
+    ws?.send(JSON.stringify(payload));
+  } catch (e) {
+    console.error("webSocketMoveInventoryItem Error:", e);
+  }
+}
+
 export const webSocketValidateGameState = async (ws: any) => {
   try {
     const payload = {
@@ -158,6 +172,35 @@ export const webSocketValidateGameState = async (ws: any) => {
     ws?.send(JSON.stringify(payload));
   } catch (e) {
     console.error("webSocketValidateGameState Error:", e);
+  }
+}
+
+export const webSocketDropItem = async (itemType: string, itemSubType: string, quantity: number, position: { x: number; y: number; z: number }, ws: any) => {
+  try {
+    const payload = {
+      itemType,
+      itemSubType,
+      quantity,
+      position,
+      chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+      action: "dropItem",
+    }
+    ws?.send(JSON.stringify(payload));
+  } catch (e) {
+    console.error("webSocketDropItem Error:", e);
+  }
+}
+
+export const webSocketPickupItem = async (groundItemId: string, ws: any) => {
+  try {
+    const payload = {
+      groundItemId,
+      chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+      action: "pickupItem",
+    }
+    ws?.send(JSON.stringify(payload));
+  } catch (e) {
+    console.error("webSocketPickupItem Error:", e);
   }
 }
 

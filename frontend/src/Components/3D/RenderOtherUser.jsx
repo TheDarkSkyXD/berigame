@@ -65,11 +65,17 @@ const RenderOtherUser = ({
   useEffect(() => {
     const userDamage = damageToRender[connectionId];
     if (userDamage) {
-      const newHealth = currentHealth - userDamage;
-      setLocalHealth(newHealth);
-      setPlayerHealth(connectionId, newHealth);
+      // Set the damage number for display
       setCurrentDamage({ val: userDamage, timestamp: Date.now() });
       removeDamageToRender(connectionId);
+    }
+  }, [damageToRender]);
+
+  // Update local health when centralized health changes (from backend or damage)
+  useEffect(() => {
+    if (playerHealths[connectionId] !== undefined) {
+      const newHealth = playerHealths[connectionId];
+      setLocalHealth(newHealth);
 
       // Check for death (visual feedback only - backend handles the actual death logic)
       if (newHealth <= 0) {
@@ -78,17 +84,8 @@ const RenderOtherUser = ({
         actions["Walk"]?.stop();
         actions["RightHook"]?.stop();
         actions["Idle"]?.stop();
-      }
-    }
-  }, [damageToRender]);
-
-  // Update local health when centralized health changes (e.g., on respawn)
-  useEffect(() => {
-    if (playerHealths[connectionId] !== undefined) {
-      setLocalHealth(playerHealths[connectionId]);
-
-      // If player respawned (health restored), restart idle animation
-      if (playerHealths[connectionId] > 0) {
+      } else if (newHealth > 0 && localHealth <= 0) {
+        // If player respawned (health restored), restart idle animation
         actions["Idle"]?.play();
       }
     }
@@ -202,6 +199,7 @@ const RenderOtherUser = ({
             health={Math.max(0, currentHealth)}
             maxHealth={30}
             yOffset={2.5}
+            isOwnPlayer={false}
           />
           {currentDamage && (
             <DamageNumber
