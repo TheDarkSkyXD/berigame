@@ -142,12 +142,10 @@ class PositionValidator {
       success: success
     };
 
-    // Log warning if validation takes too long
-    if (validationTime > 100) {
-      console.warn(`[PERFORMANCE] Position validation took ${validationTime}ms - consider optimization`);
+    // Log warning if validation takes too long (only in development)
+    if (validationTime > 1000 && process.env.NODE_ENV === 'development') {
+      console.warn(`Position validation took ${validationTime}ms - consider optimization`);
     }
-
-    console.log(`[PERFORMANCE]`, JSON.stringify(performanceMetrics));
   }
 
   /**
@@ -369,12 +367,14 @@ class PositionValidator {
       ...additionalData
     };
 
-    // Log violation with structured data
-    console.log(`[ANTI-CHEAT] Position violation detected:`, JSON.stringify(logData, null, 2));
+    // Log violation in development only
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`Position violation detected for ${connectionId}: ${violationType}`);
+    }
 
     // Log ban if applied
-    if (banUntil) {
-      console.log(`[ANTI-CHEAT] Player ${connectionId} banned until ${new Date(banUntil).toISOString()} for repeated violations`);
+    if (banUntil && process.env.NODE_ENV === 'development') {
+      console.log(`Player ${connectionId} banned until ${new Date(banUntil).toISOString()} for repeated violations`);
     }
 
     // Log metrics for monitoring
@@ -395,7 +395,10 @@ class PositionValidator {
     };
 
     // In production, this could send to CloudWatch, DataDog, etc.
-    console.log(`[METRICS]`, JSON.stringify(metrics));
+    // Only log metrics in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[METRICS]`, JSON.stringify(metrics));
+    }
   }
 
   /**
