@@ -125,8 +125,11 @@ const Api = (props) => {
 
       if (messageObject.position && messageObject.userId) {
         updateUserPosition(messageObject);
-        if (messageObject.attackingPlayer)
+        if (messageObject.attackingPlayer && messageObject.damageGiven) {
+          // Process damage to show on the target player
+          // Everyone should see damage numbers on the target (including the target themselves)
           addDamageToRender(messageObject.damageGiven);
+        }
       }
 
       if (messageObject.connections) {
@@ -336,17 +339,21 @@ const Api = (props) => {
 
       // Handle other player health updates
       if (messageObject.playerHealthUpdate) {
-        console.log(`Player ${messageObject.playerId} health updated to ${messageObject.newHealth}`);
-        setPlayerHealth(messageObject.playerId, messageObject.newHealth);
+        // Update health for all players (including self for consistency)
+        if (messageObject.playerId === userConnectionId) {
+          // Update own health from backend
+          setHealth(messageObject.newHealth);
+        } else {
+          // Update other player's health
+          setPlayerHealth(messageObject.playerId, messageObject.newHealth);
+        }
       }
       // Handle ground item events
       if (messageObject.type === "groundItemCreated") {
-        console.log("Ground item created:", messageObject.groundItem);
         addGroundItem(messageObject.groundItem);
       }
 
       if (messageObject.type === "groundItemRemoved") {
-        console.log("Ground item removed:", messageObject.groundItemId);
         removeGroundItem(messageObject.groundItemId);
       }
     }

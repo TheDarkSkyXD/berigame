@@ -67,23 +67,26 @@ const PlayerController = (props) => {
   });
 
   useEffect(() => {
-    // Set damage to render variables
+    // Set damage to render variables for own player
     const userDamage = damageToRender[userConnectionId];
     if (userDamage) {
-      const newHealth = localHealth - userDamage;
-      setLocalHealth(newHealth);
-      setHealth(newHealth);
+      // Only set the damage number, let backend health update handle the actual health value
       setCurrentDamage({ val: userDamage, timestamp: Date.now() });
       removeDamageToRender(userConnectionId);
-
-      // Check for death on frontend (backup check)
-      if (newHealth <= 0 && !isDead) {
-        console.log("Player health reached 0, triggering death state");
-        setIsDead(true);
-        setIsPlayingDeathAnimation(true);
-      }
     }
   }, [damageToRender]);
+
+  // Sync local health with global health state (updated by backend)
+  useEffect(() => {
+    setLocalHealth(health);
+
+    // Check for death when health changes
+    if (health <= 0 && !isDead) {
+      console.log("Player health reached 0, triggering death state");
+      setIsDead(true);
+      setIsPlayingDeathAnimation(true);
+    }
+  }, [health]);
 
   // Handle death state changes
   useEffect(() => {
@@ -328,6 +331,7 @@ const PlayerController = (props) => {
           health={Math.max(0, localHealth)}
           maxHealth={30}
           yOffset={2.5}
+          isOwnPlayer={true}
         />
         {currentDamage && (
           <DamageNumber

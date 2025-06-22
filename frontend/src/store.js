@@ -53,14 +53,19 @@ export const useOtherUsersStore = create((set) => ({
       },
     })),
   addDamageToRender: (newData) =>
-    set((state) => ({
-      damageToRender: {
+    set((state) => {
+      console.log(`📝 Store: Adding damage to render for ${newData.receivingPlayer}:`, newData.damage);
+      console.log(`📝 Store: Current damageToRender state:`, state.damageToRender);
+      const newDamage = state.damageToRender[newData.receivingPlayer]
+        ? state.damageToRender[newData.receivingPlayer] + newData.damage
+        : newData.damage;
+      const newState = {
         ...state.damageToRender,
-        [newData.receivingPlayer]: state.damageToRender[newData.receivingPlayer]
-          ? state.damageToRender[newData.receivingPlayer] + newData.damage
-          : newData.damage,
-      },
-    })),
+        [newData.receivingPlayer]: newDamage,
+      };
+      console.log(`📝 Store: New damageToRender state:`, newState);
+      return { damageToRender: newState };
+    }),
   setPlayerHealth: (playerId, health) =>
     set((state) => ({
       playerHealths: {

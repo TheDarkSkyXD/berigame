@@ -347,7 +347,7 @@ exports.handler = async function (event, context) {
     }
   };
 
-  const dealDamage = (connectionId, damage, chatRoomId) => {
+  const dealDamage = async (connectionId, damage, chatRoomId) => {
     const rowParams = {
       TableName: process.env.DB,
       Key: {
@@ -358,28 +358,37 @@ exports.handler = async function (event, context) {
       ExpressionAttributeValues: {
         ":val": damage,
       },
+      ReturnValues: "ALL_NEW"
     };
 
-    dynamodb.update(rowParams, (e, data) => {
-      if (e) {
-        console.error(
-          "Unable to update item. Error JSON:",
-          JSON.stringify(e, null, 2)
-        );
-        return;
-      }
+    try {
+      const updateResult = await dynamodb.update(rowParams).promise();
+      const newHealth = updateResult.Attributes.health;
+
+      console.log(`Player ${connectionId} took ${damage} damage, new health: ${newHealth}`);
+
+      // Broadcast health update to all players
+      const connections = await getCachedConnections(chatRoomId);
+      const healthUpdateMessage = {
+        playerHealthUpdate: true,
+        playerId: connectionId,
+        newHealth: newHealth,
+        timestamp: Date.now(),
+        chatRoomId: chatRoomId,
+      };
+
+      await broadcastToConnections(connections, healthUpdateMessage);
 
       // Check for death after dealing damage
-      dynamodb.get(rowParams, async (err, data) => {
-        if (err) {
-          console.error("Couldn't get user item after deal damage:", err);
-        } else {
-          if (data.Item?.health <= 0) {
-            await handlePlayerDeath(connectionId, chatRoomId);
-          }
-        }
-      });
-    });
+      if (newHealth <= 0) {
+        await handlePlayerDeath(connectionId, chatRoomId);
+      }
+    } catch (e) {
+      console.error(
+        "Unable to update item. Error JSON:",
+        JSON.stringify(e, null, 2)
+      );
+    }
   };
 
   switch (routeKey) {
@@ -551,7 +560,7 @@ exports.handler = async function (event, context) {
             receivingPlayer: attackingPlayer,
             damage,
           };
-          dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+          await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
         }
 
         // Broadcast validated position to other players in parallel
@@ -566,7 +575,8 @@ exports.handler = async function (event, context) {
         }));
 
         console.log(`📡 [${connectionId}] Broadcasting to ${connectionObjects.length} connections...`);
-        await broadcastToConnections(connectionObjects, bodyAsJSON.message, connectionId);
+        // Don't exclude the attacker from receiving attack messages - they need to see damage numbers
+        await broadcastToConnections(connectionObjects, bodyAsJSON.message);
 
         const broadcastTime = Date.now() - broadcastStartTime;
         const totalTime = Date.now() - caseStartTime;
