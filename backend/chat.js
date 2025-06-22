@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const helpers = require("./helpers");
 const { getRounds } = require("bcryptjs");
 const { validCallbackObject } = require("./helpers");
+const PositionValidator = require("./positionValidator");
 const apig = new AWS.ApiGatewayManagementApi({
   //Offline check for websocket issue with serverless offline
   //https://github.com/dherault/serverless-offline/issues/924
@@ -14,6 +15,7 @@ const apig = new AWS.ApiGatewayManagementApi({
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 
 const DB = process.env.DB;
+const positionValidator = new PositionValidator(DB);
 
 exports.handler = async function (event, context) {
   const {
@@ -183,9 +185,19 @@ exports.handler = async function (event, context) {
             SK,
             created: timestamp,
             ttl: Math.floor(new Date().getTime() / 1000) + 360, // 6 mins from now?
-            health: 30,
-            berries: 0, // Initialize berry count
             health: MAX_HEALTH,
+            berries: 0, // Initialize total berry count
+            berries_blueberry: 0,
+            berries_strawberry: 0,
+            berries_greenberry: 0,
+            berries_goldberry: 0,
+            // Position validation fields
+            lastValidPosition: SPAWN_LOCATION.position,
+            lastPositionUpdate: timestamp,
+            positionHistory: [{ position: SPAWN_LOCATION.position, timestamp }],
+            violationCount: 0,
+            lastViolationTime: 0,
+            updateCount: 0,
           },
         })
         .promise();
@@ -214,6 +226,36 @@ exports.handler = async function (event, context) {
           "Could not send chatroom connections to user",
           connectionId
         );
+      }
+
+      // Send inventory state to the connecting player
+      const playerConnection = getConnections.Items.find(
+        conn => conn.SK === "CONNECTION#" + connectionId
+      );
+
+      if (playerConnection) {
+        const inventoryData = {
+          berries: playerConnection.berries || 0,
+          berries_blueberry: playerConnection.berries_blueberry || 0,
+          berries_strawberry: playerConnection.berries_strawberry || 0,
+          berries_greenberry: playerConnection.berries_greenberry || 0,
+          berries_goldberry: playerConnection.berries_goldberry || 0,
+        };
+
+        try {
+          await apig
+            .postToConnection({
+              ConnectionId: connectionId,
+              Data: JSON.stringify({
+                inventorySync: true,
+                inventory: inventoryData,
+                timestamp: Date.now(),
+              }),
+            })
+            .promise();
+        } catch (e) {
+          console.log("couldn't send inventory sync to " + connectionId, e);
+        }
       }
       break;
 
@@ -264,7 +306,47 @@ exports.handler = async function (event, context) {
 
     case "sendUpdate": //TODO: rename to send update
       try {
-        //Send message to socket connections
+        const currentTimestamp = Date.now();
+        const incomingPosition = bodyAsJSON.message.position;
+
+        // Validate position update
+        const validationResult = await positionValidator.validatePositionUpdate(
+          connectionId,
+          bodyAsJSON.chatRoomId,
+          incomingPosition,
+          currentTimestamp
+        );
+
+        // If position is invalid, send correction back to the client
+        if (!validationResult.valid) {
+          console.log(`Position validation failed for ${connectionId}: ${validationResult.reason}`);
+
+          // Send position correction to the offending client
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: connectionId,
+                Data: JSON.stringify({
+                  type: "positionCorrection",
+                  correctedPosition: validationResult.correctedPosition,
+                  reason: validationResult.reason,
+                  timestamp: currentTimestamp
+                }),
+              })
+              .promise();
+          } catch (e) {
+            console.log("Couldn't send position correction to " + connectionId, e);
+          }
+
+          // Don't broadcast invalid position to other players
+          return { statusCode: 200 };
+        }
+
+        // Use the validated/corrected position for broadcasting
+        bodyAsJSON.message.position = validationResult.correctedPosition;
+        bodyAsJSON.message.serverValidated = true;
+        bodyAsJSON.message.validationTimestamp = currentTimestamp;
+
         //TODO VERIFY CAN ATTACK (SECURITY)
         const attackingPlayer = bodyAsJSON.message.attackingPlayer;
         let damage = 0;
@@ -276,6 +358,8 @@ exports.handler = async function (event, context) {
           };
           dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
         }
+
+        // Broadcast validated position to other players
         for (const otherConnectionId of bodyAsJSON.connections) {
           bodyAsJSON.message.connectionId = connectionId;
           bodyAsJSON.message.userId = senderId;
@@ -291,13 +375,14 @@ exports.handler = async function (event, context) {
           }
         }
       } catch (e) {
-        console.error(e);
+        console.error("SendUpdate error:", e);
       }
       break;
 
     case "startHarvest":
       try {
         const treeId = bodyAsJSON.treeId;
+        const berryType = bodyAsJSON.berryType || 'blueberry';
         const harvestDuration = Math.floor(Math.random() * 8) + 3; // 3-10 seconds
 
         // Store harvest start time in database
@@ -308,6 +393,7 @@ exports.handler = async function (event, context) {
               PK: bodyAsJSON.chatRoomId,
               SK: `HARVEST#${treeId}#${connectionId}`,
               treeId,
+              berryType,
               playerId: connectionId,
               startTime: timestamp,
               duration: harvestDuration,
@@ -337,6 +423,7 @@ exports.handler = async function (event, context) {
                 Data: JSON.stringify({
                   harvestStarted: true,
                   treeId,
+                  berryType,
                   playerId: connectionId,
                   duration: harvestDuration,
                   timestamp: Date.now(),
@@ -363,6 +450,8 @@ exports.handler = async function (event, context) {
               .promise();
 
             if (harvestCheck.Item) {
+              const harvestBerryType = harvestCheck.Item.berryType || 'blueberry';
+
               // Remove harvest record
               await dynamodb
                 .delete({
@@ -374,7 +463,8 @@ exports.handler = async function (event, context) {
                 })
                 .promise();
 
-              // Add berry to player's inventory
+              // Add berry to player's inventory - update specific berry type counter
+              const berryField = `berries_${harvestBerryType}`;
               await dynamodb
                 .update({
                   TableName: DB,
@@ -382,7 +472,7 @@ exports.handler = async function (event, context) {
                     PK: bodyAsJSON.chatRoomId,
                     SK: "CONNECTION#" + connectionId,
                   },
-                  UpdateExpression: "ADD berries :val",
+                  UpdateExpression: `ADD ${berryField} :val, berries :val`,
                   ExpressionAttributeValues: {
                     ":val": 1,
                   },
@@ -400,6 +490,7 @@ exports.handler = async function (event, context) {
                       Data: JSON.stringify({
                         harvestCompleted: true,
                         treeId,
+                        berryType: harvestBerryType,
                         playerId: connectionId,
                         timestamp: Date.now(),
                       }),
@@ -421,8 +512,299 @@ exports.handler = async function (event, context) {
       break;
 
     case "completeHarvest":
-      // This case is handled by the setTimeout in startHarvest
-      // But we can add manual completion logic here if needed
+      try {
+        const treeId = bodyAsJSON.treeId;
+
+        // Check if harvest record exists and belongs to this player
+        const harvestCheck = await dynamodb
+          .get({
+            TableName: DB,
+            Key: {
+              PK: bodyAsJSON.chatRoomId,
+              SK: `HARVEST#${treeId}#${connectionId}`,
+            },
+          })
+          .promise();
+
+        if (harvestCheck.Item) {
+          const harvestBerryType = harvestCheck.Item.berryType || 'blueberry';
+          const harvestStartTime = harvestCheck.Item.startTime;
+          const harvestDuration = harvestCheck.Item.duration;
+          const currentTime = Date.now();
+
+          // Verify harvest has been running long enough (prevent early completion)
+          const elapsedTime = currentTime - harvestStartTime;
+          if (elapsedTime < (harvestDuration * 1000 - 500)) { // Allow 500ms tolerance
+            console.log(`Harvest completion attempted too early for ${connectionId}. Elapsed: ${elapsedTime}ms, Required: ${harvestDuration * 1000}ms`);
+            break;
+          }
+
+          // Remove harvest record
+          await dynamodb
+            .delete({
+              TableName: DB,
+              Key: {
+                PK: bodyAsJSON.chatRoomId,
+                SK: `HARVEST#${treeId}#${connectionId}`,
+              },
+            })
+            .promise();
+
+          // Add berry to player's inventory
+          const berryField = `berries_${harvestBerryType}`;
+          await dynamodb
+            .update({
+              TableName: DB,
+              Key: {
+                PK: bodyAsJSON.chatRoomId,
+                SK: "CONNECTION#" + connectionId,
+              },
+              UpdateExpression: `ADD ${berryField} :val, berries :val`,
+              ExpressionAttributeValues: {
+                ":val": 1,
+              },
+            })
+            .promise();
+
+          // Get all connections to broadcast completion
+          const usersParams = {
+            TableName: DB,
+            KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+            ExpressionAttributeValues: {
+              ":pk": bodyAsJSON.chatRoomId,
+              ":sk": "CONNECTION#",
+            },
+          };
+          const getConnections = await dynamodb.query(usersParams).promise();
+
+          // Broadcast harvest completion
+          for (const connection of getConnections.Items) {
+            const targetConnectionId = connection.SK.split("#")[1];
+            try {
+              await apig
+                .postToConnection({
+                  ConnectionId: targetConnectionId,
+                  Data: JSON.stringify({
+                    harvestCompleted: true,
+                    treeId,
+                    berryType: harvestBerryType,
+                    playerId: connectionId,
+                    timestamp: Date.now(),
+                  }),
+                })
+                .promise();
+            } catch (e) {
+              console.log("couldn't send harvest completion message to " + targetConnectionId, e);
+            }
+          }
+        } else {
+          console.log(`No active harvest found for player ${connectionId} on tree ${treeId}`);
+        }
+      } catch (e) {
+        console.error("Error in manual harvest completion:", e);
+      }
+      break;
+
+    case "cancelHarvest":
+      try {
+        const treeId = bodyAsJSON.treeId;
+
+        // Remove harvest record if it exists
+        await dynamodb
+          .delete({
+            TableName: DB,
+            Key: {
+              PK: bodyAsJSON.chatRoomId,
+              SK: `HARVEST#${treeId}#${connectionId}`,
+            },
+          })
+          .promise();
+
+        // Get all connections to broadcast cancellation
+        const usersParams = {
+          TableName: DB,
+          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+          ExpressionAttributeValues: {
+            ":pk": bodyAsJSON.chatRoomId,
+            ":sk": "CONNECTION#",
+          },
+        };
+        const getConnections = await dynamodb.query(usersParams).promise();
+
+        // Broadcast harvest cancellation
+        for (const connection of getConnections.Items) {
+          const targetConnectionId = connection.SK.split("#")[1];
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: targetConnectionId,
+                Data: JSON.stringify({
+                  harvestCancelled: true,
+                  treeId,
+                  playerId: connectionId,
+                  timestamp: Date.now(),
+                }),
+              })
+              .promise();
+          } catch (e) {
+            console.log("couldn't send harvest cancellation message to " + targetConnectionId, e);
+          }
+        }
+      } catch (e) {
+        console.error("Error cancelling harvest:", e);
+      }
+      break;
+
+    case "validateInventory":
+      try {
+        // Get player's current inventory from database
+        const playerParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+        };
+        const playerData = await dynamodb.get(playerParams).promise();
+
+        if (playerData.Item) {
+          const serverInventory = {
+            berries: playerData.Item.berries || 0,
+            berries_blueberry: playerData.Item.berries_blueberry || 0,
+            berries_strawberry: playerData.Item.berries_strawberry || 0,
+            berries_greenberry: playerData.Item.berries_greenberry || 0,
+            berries_goldberry: playerData.Item.berries_goldberry || 0,
+          };
+
+          // Send authoritative inventory state back to client
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: connectionId,
+                Data: JSON.stringify({
+                  inventoryValidation: true,
+                  inventory: serverInventory,
+                  timestamp: Date.now(),
+                }),
+              })
+              .promise();
+          } catch (e) {
+            console.log("couldn't send inventory validation to " + connectionId, e);
+          }
+        }
+      } catch (e) {
+        console.error("Error validating inventory:", e);
+      }
+      break;
+
+    case "requestInventorySync":
+      try {
+        // Force inventory synchronization - same as validateInventory but with different message type
+        const playerParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+        };
+        const playerData = await dynamodb.get(playerParams).promise();
+
+        if (playerData.Item) {
+          const serverInventory = {
+            berries: playerData.Item.berries || 0,
+            berries_blueberry: playerData.Item.berries_blueberry || 0,
+            berries_strawberry: playerData.Item.berries_strawberry || 0,
+            berries_greenberry: playerData.Item.berries_greenberry || 0,
+            berries_goldberry: playerData.Item.berries_goldberry || 0,
+          };
+
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: connectionId,
+                Data: JSON.stringify({
+                  inventorySync: true,
+                  inventory: serverInventory,
+                  timestamp: Date.now(),
+                }),
+              })
+              .promise();
+          } catch (e) {
+            console.log("couldn't send inventory sync to " + connectionId, e);
+          }
+        }
+      } catch (e) {
+        console.error("Error syncing inventory:", e);
+      }
+      break;
+
+    case "validateGameState":
+      try {
+        // Get player's current state from database
+        const playerParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+        };
+        const playerData = await dynamodb.get(playerParams).promise();
+
+        // Get active harvests for this player
+        const harvestParams = {
+          TableName: DB,
+          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+          ExpressionAttributeValues: {
+            ":pk": bodyAsJSON.chatRoomId,
+            ":sk": `HARVEST#`,
+          },
+        };
+        const harvestData = await dynamodb.query(harvestParams).promise();
+
+        // Filter harvests for this player
+        const playerHarvests = harvestData.Items.filter(
+          harvest => harvest.playerId === connectionId
+        );
+
+        if (playerData.Item) {
+          const gameState = {
+            inventory: {
+              berries: playerData.Item.berries || 0,
+              berries_blueberry: playerData.Item.berries_blueberry || 0,
+              berries_strawberry: playerData.Item.berries_strawberry || 0,
+              berries_greenberry: playerData.Item.berries_greenberry || 0,
+              berries_goldberry: playerData.Item.berries_goldberry || 0,
+            },
+            activeHarvests: playerHarvests.map(harvest => ({
+              treeId: harvest.treeId,
+              berryType: harvest.berryType,
+              startTime: harvest.startTime,
+              duration: harvest.duration,
+              playerId: harvest.playerId,
+            })),
+            health: playerData.Item.health || 30,
+            position: playerData.Item.lastValidPosition || { x: 0, y: 0, z: 0 },
+          };
+
+          // Send comprehensive game state back to client
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: connectionId,
+                Data: JSON.stringify({
+                  gameStateValidation: true,
+                  gameState: gameState,
+                  timestamp: Date.now(),
+                }),
+              })
+              .promise();
+          } catch (e) {
+            console.log("couldn't send game state validation to " + connectionId, e);
+          }
+        }
+      } catch (e) {
+        console.error("Error validating game state:", e);
+      }
       break;
   }
 

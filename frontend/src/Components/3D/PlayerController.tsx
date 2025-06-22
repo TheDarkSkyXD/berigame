@@ -45,6 +45,8 @@ const PlayerController = (props) => {
   const health = useUserStateStore((state: any) => state.health);
   const setHealth = useUserStateStore((state: any) => state.setHealth);
   const setIsDead = useUserStateStore((state: any) => state.setIsDead);
+  const positionCorrection = useUserStateStore((state: any) => state.positionCorrection);
+  const clearPositionCorrection = useUserStateStore((state: any) => state.clearPositionCorrection);
   const justSentMessage = useChatStore((state) => state.justSentMessage);
   const damageToRender = useOtherUsersStore((state) => state.damageToRender);
   const removeDamageToRender = useOtherUsersStore(
@@ -129,6 +131,32 @@ const PlayerController = (props) => {
       }
     }
   }, [isRespawning]);
+
+  // Handle position corrections from server
+  useEffect(() => {
+    if (positionCorrection && objRef.current) {
+      console.log("Applying server position correction:", positionCorrection);
+
+      // Stop any current movement
+      if (currentTween) {
+        TWEEN.remove(currentTween);
+        setCurrentTween(null);
+      }
+
+      // Apply corrected position immediately
+      const correctedPos = positionCorrection.correctedPosition;
+      objRef.current.position.set(correctedPos.x, correctedPos.y, correctedPos.z);
+
+      // Stop walking animation and return to idle
+      actions["Walk"]?.stop();
+      actions["Idle"]?.play();
+
+      // Clear the correction from state
+      clearPositionCorrection();
+
+      console.log("Position corrected to:", correctedPos);
+    }
+  }, [positionCorrection]);
 
   const walkToPointOnLand = (pointOnLand) => {
     if (followingInterval) clearInterval(followingInterval);

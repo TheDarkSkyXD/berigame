@@ -40,12 +40,12 @@ Resources:
           AttributeType: "S"
       KeySchema:
         - AttributeName: "PK"
-          KeyType: "HASH" 
+          KeyType: "HASH"
         - AttributeName: "SK"
           KeyType: "RANGE"
       ProvisionedThroughput:
-        ReadCapacityUnits:  1
-        WriteCapacityUnits: 1
+        ReadCapacityUnits:  2
+        WriteCapacityUnits: 2
       GlobalSecondaryIndexes:
         - IndexName: HandleIndex
           KeySchema:
