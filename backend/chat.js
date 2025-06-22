@@ -550,7 +550,7 @@ exports.handler = async function (event, context) {
             PK,
             SK,
             created: timestamp,
-            ttl: Math.floor(new Date().getTime() / 1000) + 360, // 6 mins from now?
+            ttl: Math.floor(new Date().getTime() / 1000) + 120, // 2 mins from now
             health: MAX_HEALTH,
             berries: 0, // Initialize total berry count
             berries_blueberry: 0,
