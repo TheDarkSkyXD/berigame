@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useState } from "react";
+import React, { memo, useEffect, useState, useRef } from "react";
 import { useChatStore, useInventoryStore, useUserInputStore, useUserStateStore, useWebsocketStore } from "../store";
 import { webSocketDropItem, webSocketMoveInventoryItem } from "../Api";
 
@@ -9,6 +9,9 @@ type InventoryProps = {
 
 const Inventory = memo((props: InventoryProps) => {
   const [showInventory, setShowInventory] = useState(false);
+  const mouseDownTimeRef = useRef<number | null>(null);
+  const dragStartSlotRef = useRef<number | null>(null);
+
   const focusedChat = useChatStore((state) => state.focusedChat);
   const items = useInventoryStore((state) => state.items);
   const draggedItem = useInventoryStore((state) => state.draggedItem);
@@ -25,6 +28,9 @@ const Inventory = memo((props: InventoryProps) => {
   const health = useUserStateStore((state) => state.health);
   const maxHealth = useUserStateStore((state) => state.maxHealth);
 
+  // Constants for drag detection
+  const DRAG_THRESHOLD_MS = 200; // Hold for 200ms to start drag
+
 
   const keyDownHandler = (e) => {
     if (e.keyCode === 73 && !focusedChat) {
@@ -34,12 +40,6 @@ const Inventory = memo((props: InventoryProps) => {
 
   const consumeBerry = (item) => {
     if (!item || item.type !== 'berry') return;
-
-    // Check if player can benefit from healing
-    if (health >= maxHealth) {
-      console.log("Health is already full, cannot consume berry");
-      return;
-    }
 
     // Send consumption request to backend
     if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
@@ -51,6 +51,37 @@ const Inventory = memo((props: InventoryProps) => {
       };
       websocketConnection.send(JSON.stringify(payload));
     }
+  };
+
+  // Smart click/drag detection handlers
+  const handleMouseDown = (e: React.MouseEvent, item: any, slotIndex: number) => {
+    if (!item) return;
+
+    mouseDownTimeRef.current = Date.now();
+    dragStartSlotRef.current = slotIndex;
+    console.log('Mouse down on slot', slotIndex, 'at time', mouseDownTimeRef.current);
+  };
+
+  const handleClick = (e: React.MouseEvent, item: any, slotIndex: number) => {
+    if (!item || !mouseDownTimeRef.current) return;
+
+    const clickDuration = Date.now() - mouseDownTimeRef.current;
+    console.log('Click detected, duration:', clickDuration, 'ms');
+
+    if (clickDuration < DRAG_THRESHOLD_MS) {
+      console.log('Quick click detected for', item.name);
+      e.stopPropagation();
+
+      if (item.type === 'berry') {
+        consumeBerry(item);
+      } else {
+        handleItemClick(item, e);
+      }
+    }
+
+    // Reset
+    mouseDownTimeRef.current = null;
+    dragStartSlotRef.current = null;
   };
   const handleItemClick = (item: any, e: React.MouseEvent) => {
     if (!item || !websocketConnection) return;
@@ -96,13 +127,35 @@ const Inventory = memo((props: InventoryProps) => {
 
   // Drag and drop handlers
   const handleDragStart = (e, item, slotIndex) => {
+    console.log('Drag start attempted for slot', slotIndex);
+
+    // Check if enough time has passed since mouse down
+    if (!mouseDownTimeRef.current) {
+      console.log('Preventing drag - no mouse down time recorded');
+      e.preventDefault();
+      return false;
+    }
+
+    const holdDuration = Date.now() - mouseDownTimeRef.current;
+    console.log('Hold duration:', holdDuration, 'ms');
+
+    if (holdDuration < DRAG_THRESHOLD_MS) {
+      console.log('Preventing drag - not held long enough');
+      e.preventDefault();
+      return false;
+    }
+
+    console.log('Drag start allowed for', item.name);
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', ''); // Required for Firefox
     setDraggedItem(item, slotIndex);
   };
 
   const handleDragEnd = (e) => {
+    console.log('Drag ended');
     clearDragState();
+    mouseDownTimeRef.current = null;
+    dragStartSlotRef.current = null;
   };
 
   const handleDragOver = (e, slotIndex) => {
@@ -177,7 +230,9 @@ const Inventory = memo((props: InventoryProps) => {
               return (
                 <div
                   key={i}
-                  draggable={!!item}
+                  draggable={!!item} // Always draggable if item exists, but controlled by handleDragStart
+                  onMouseDown={(e) => item && handleMouseDown(e, item, i)}
+                  onClick={(e) => item && handleClick(e, item, i)}
                   onDragStart={(e) => item && handleDragStart(e, item, i)}
                   onDragEnd={handleDragEnd}
                   onDragOver={(e) => handleDragOver(e, i)}
@@ -197,12 +252,14 @@ const Inventory = memo((props: InventoryProps) => {
                     alignItems: "center",
                     justifyContent: "center",
                     position: "relative",
-                    cursor: item ? (isDragging ? "grabbing" : "grab") : "default",
+                    cursor: item
+                      ? (isDragging ? "grabbing" : (item.type === 'berry' ? "pointer" : "grab"))
+                      : "default",
                     opacity: isDragging ? 0.5 : 1,
                     transition: "all 0.2s ease",
+                    userSelect: "none", // Prevent text selection during drag detection
                   }}
-                  title={item ? `${item.name} (${item.quantity || 1})${item.type === 'berry' ? ' - Click to eat, Drag to move' : ' - Drag to move'}` : "Empty slot"}
-                  onClick={() => item && item.type === 'berry' && !isDragging && consumeBerry(item)}
+                  title={item ? `${item.name} (${item.quantity || 1})${item.type === 'berry' ? ' - Click to eat, Hold to drag' : ' - Hold to drag'}` : "Empty slot"}
                 >
                   {item && (
                     <>

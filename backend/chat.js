@@ -828,11 +828,6 @@ exports.handler = async function (event, context) {
             break;
           }
 
-          // Check if player can benefit from healing
-          if (currentHealth >= MAX_HEALTH) {
-            break;
-          }
-
           // Calculate health restoration based on berry type
           let healthRestore = 0;
           switch (berryType) {
