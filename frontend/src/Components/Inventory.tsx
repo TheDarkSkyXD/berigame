@@ -1,5 +1,6 @@
 import React, { memo, useEffect, useState } from "react";
-import { useChatStore, useInventoryStore } from "../store";
+import { useChatStore, useInventoryStore, useUserInputStore, useUserStateStore, useWebsocketStore } from "../store";
+import { webSocketDropItem } from "../Api";
 
 type InventoryProps = {
   setShowInventory: React.Dispatch<React.SetStateAction<boolean>>;
@@ -10,10 +11,56 @@ const Inventory = memo((props: InventoryProps) => {
   const [showInventory, setShowInventory] = useState(false);
   const focusedChat = useChatStore((state) => state.focusedChat);
   const items = useInventoryStore((state) => state.items);
+  const setClickedOtherObject = useUserInputStore((state: any) => state.setClickedOtherObject);
+  const playerPosition = useUserStateStore((state: any) => state.position);
+  const websocketConnection = useWebsocketStore((state: any) => state.websocketConnection);
+
   const keyDownHandler = (e) => {
     if (e.keyCode === 73 && !focusedChat) {
       setShowInventory(!showInventory);
     }
+  };
+
+  const handleItemClick = (item: any, e: React.MouseEvent) => {
+    if (!item || !websocketConnection) return;
+
+    e.stopPropagation();
+
+    const useItem = () => {
+      // TODO: Implement item usage logic
+      console.log(`Using ${item.name}`);
+      setClickedOtherObject(null);
+    };
+
+    const dropItem = () => {
+      // Calculate drop position slightly in front of player
+      const dropPosition = {
+        x: (playerPosition?.x || 0) + (Math.random() - 0.5) * 2,
+        y: playerPosition?.y || 0,
+        z: (playerPosition?.z || 0) + (Math.random() - 0.5) * 2,
+      };
+
+      webSocketDropItem(item.type, item.subType, 1, dropPosition, websocketConnection);
+      setClickedOtherObject(null);
+    };
+
+    setClickedOtherObject({
+      isCombatable: false,
+      connectionId: "INVENTORY_ITEM",
+      e,
+      dropdownOptions: [
+        {
+          label: `Use ${item.name}`,
+          onClick: useItem,
+          disabled: true, // Disabled for now until we implement item usage
+        },
+        {
+          label: `Drop ${item.name}`,
+          onClick: dropItem,
+          disabled: false,
+        },
+      ],
+    });
   };
 
   useEffect(() => {
@@ -68,6 +115,7 @@ const Inventory = memo((props: InventoryProps) => {
                     cursor: item ? "pointer" : "default",
                   }}
                   title={item ? `${item.name} (${item.quantity || 1})` : "Empty slot"}
+                  onClick={item ? (e) => handleItemClick(item, e) : undefined}
                 >
                   {item && (
                     <>

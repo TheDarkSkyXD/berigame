@@ -6,6 +6,7 @@ import {
   useWebsocketStore,
   useHarvestStore,
   useInventoryStore,
+  useGroundItemsStore,
 } from "../store";
 import { connectToChatRoom } from "../Api";
 
@@ -55,6 +56,10 @@ const Api = (props) => {
   );
   const setHealth = useUserStateStore((state: any) => state.setHealth);
   const setPositionCorrection = useUserStateStore((state: any) => state.setPositionCorrection);
+  const addGroundItem = useGroundItemsStore((state: any) => state.addGroundItem);
+  const removeGroundItem = useGroundItemsStore((state: any) => state.removeGroundItem);
+  const clearGroundItems = useGroundItemsStore((state: any) => state.clearGroundItems);
+  const syncGroundItems = useGroundItemsStore((state: any) => state.syncGroundItems);
 
   // if (process.env.NODE_ENV === "development") {
   //   url = "http://localhost:3000/dev/";
@@ -259,6 +264,12 @@ const Api = (props) => {
           }
         });
 
+        // Sync ground items
+        if (gameState.groundItems) {
+          console.log(`Syncing ${gameState.groundItems.length} ground items`);
+          syncGroundItems(gameState.groundItems);
+        }
+
         // Update health if different
         const currentHealth = useUserStateStore.getState().health;
         if (currentHealth !== gameState.health) {
@@ -300,6 +311,17 @@ const Api = (props) => {
           );
         }
       }
+
+      // Handle ground item events
+      if (messageObject.type === "groundItemCreated") {
+        console.log("Ground item created:", messageObject.groundItem);
+        addGroundItem(messageObject.groundItem);
+      }
+
+      if (messageObject.type === "groundItemRemoved") {
+        console.log("Ground item removed:", messageObject.groundItemId);
+        removeGroundItem(messageObject.groundItemId);
+      }
     }
   };
 
@@ -314,6 +336,9 @@ const Api = (props) => {
 
     // Clear inventory on connection error to prevent stale state
     clearInventory();
+
+    // Clear ground items on connection error
+    clearGroundItems();
 
     // Cancel any active harvests on error
     const { activeHarvests, cancelHarvest } = useHarvestStore.getState();

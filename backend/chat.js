@@ -45,77 +45,158 @@ exports.handler = async function (event, context) {
     console.log(`Player ${connectionId} has died, initiating respawn...`);
 
     try {
-      // 1. Reset player's health and position to spawn location
-      const respawnParams = {
+      // 1. Get player's current inventory before death
+      const playerParams = {
         TableName: process.env.DB,
         Key: {
           PK: chatRoomId,
           SK: "CONNECTION#" + connectionId,
         },
-        UpdateExpression: "SET health = :health, #pos = :position, #rot = :rotation",
-        ExpressionAttributeNames: {
-          "#pos": "position",
-          "#rot": "rotation"
-        },
-        ExpressionAttributeValues: {
-          ":health": MAX_HEALTH,
-          ":position": SPAWN_LOCATION.position,
-          ":rotation": SPAWN_LOCATION.rotation,
-        },
       };
 
-      await dynamodb.update(respawnParams).promise();
-      console.log(`Player ${connectionId} respawned successfully`);
+      const playerData = await dynamodb.get(playerParams).promise();
 
-      // 2. Get all connections to broadcast death/respawn event
-      const usersParams = {
-        TableName: process.env.DB,
-        KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-        ExpressionAttributeValues: {
-          ":pk": chatRoomId,
-          ":sk": "CONNECTION#",
-        },
-      };
+      if (playerData.Item) {
+        const player = playerData.Item;
+        const deathPosition = player.lastValidPosition || SPAWN_LOCATION.position;
 
-      const getConnections = await dynamodb.query(usersParams).promise();
+        // Drop all inventory items at death location
+        const berryTypes = ['blueberry', 'strawberry', 'greenberry', 'goldberry'];
+        const droppedItems = [];
 
-      // 3. Broadcast death/respawn event to all connected players
-      const deathMessage = {
-        type: "playerDeath",
-        deadPlayerId: connectionId,
-        respawnLocation: SPAWN_LOCATION,
-        timestamp: Date.now(),
-      };
+        for (const berryType of berryTypes) {
+          const berryField = `berries_${berryType}`;
+          const quantity = player[berryField] || 0;
 
-      const respawnMessage = {
-        type: "playerRespawn",
-        playerId: connectionId,
-        health: MAX_HEALTH,
-        position: SPAWN_LOCATION.position,
-        rotation: SPAWN_LOCATION.rotation,
-        timestamp: Date.now(),
-      };
+          if (quantity > 0) {
+            // Create ground item for each berry type
+            const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      // Send death event to all players
-      for (const connection of getConnections.Items) {
-        const targetConnectionId = connection.SK.split("#")[1];
-        try {
-          await apig
-            .postToConnection({
-              ConnectionId: targetConnectionId,
-              Data: JSON.stringify(deathMessage),
-            })
-            .promise();
+            await dynamodb.put({
+              TableName: process.env.DB,
+              Item: {
+                PK: chatRoomId,
+                SK: groundItemId,
+                itemType: 'berry',
+                itemSubType: berryType,
+                quantity,
+                position: {
+                  x: deathPosition.x + (Math.random() - 0.5) * 2, // Scatter items slightly
+                  y: deathPosition.y,
+                  z: deathPosition.z + (Math.random() - 0.5) * 2,
+                },
+                droppedBy: connectionId,
+                droppedAt: Date.now(),
+                droppedOnDeath: true,
+                ttl: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
+              },
+            }).promise();
 
-          // Send respawn event immediately after death event
-          await apig
-            .postToConnection({
-              ConnectionId: targetConnectionId,
-              Data: JSON.stringify(respawnMessage),
-            })
-            .promise();
-        } catch (e) {
-          console.log(`Couldn't send death/respawn message to ${targetConnectionId}:`, e);
+            droppedItems.push({
+              id: groundItemId,
+              itemType: 'berry',
+              itemSubType: berryType,
+              quantity,
+              position: {
+                x: deathPosition.x + (Math.random() - 0.5) * 2,
+                y: deathPosition.y,
+                z: deathPosition.z + (Math.random() - 0.5) * 2,
+              },
+              droppedBy: connectionId,
+              droppedAt: Date.now(),
+              droppedOnDeath: true,
+            });
+          }
+        }
+
+        // Reset player's inventory and health/position
+        const respawnParams = {
+          TableName: process.env.DB,
+          Key: {
+            PK: chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+          UpdateExpression: "SET health = :health, #pos = :position, #rot = :rotation, berries = :zero, berries_blueberry = :zero, berries_strawberry = :zero, berries_greenberry = :zero, berries_goldberry = :zero",
+          ExpressionAttributeNames: {
+            "#pos": "position",
+            "#rot": "rotation"
+          },
+          ExpressionAttributeValues: {
+            ":health": MAX_HEALTH,
+            ":position": SPAWN_LOCATION.position,
+            ":rotation": SPAWN_LOCATION.rotation,
+            ":zero": 0,
+          },
+        };
+
+        await dynamodb.update(respawnParams).promise();
+        console.log(`Player ${connectionId} respawned successfully, dropped ${droppedItems.length} item stacks`);
+
+        // 2. Get all connections to broadcast death/respawn event
+        const usersParams = {
+          TableName: process.env.DB,
+          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+          ExpressionAttributeValues: {
+            ":pk": chatRoomId,
+            ":sk": "CONNECTION#",
+          },
+        };
+
+        const getConnections = await dynamodb.query(usersParams).promise();
+
+        // 3. Broadcast death/respawn event and dropped items to all connected players
+        const deathMessage = {
+          type: "playerDeath",
+          deadPlayerId: connectionId,
+          respawnLocation: SPAWN_LOCATION,
+          droppedItems: droppedItems,
+          timestamp: Date.now(),
+        };
+
+        const respawnMessage = {
+          type: "playerRespawn",
+          playerId: connectionId,
+          health: MAX_HEALTH,
+          position: SPAWN_LOCATION.position,
+          rotation: SPAWN_LOCATION.rotation,
+          timestamp: Date.now(),
+        };
+
+        // Send death event and dropped items to all players
+        for (const connection of getConnections.Items) {
+          const targetConnectionId = connection.SK.split("#")[1];
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: targetConnectionId,
+                Data: JSON.stringify(deathMessage),
+              })
+              .promise();
+
+            // Send respawn event immediately after death event
+            await apig
+              .postToConnection({
+                ConnectionId: targetConnectionId,
+                Data: JSON.stringify(respawnMessage),
+              })
+              .promise();
+
+            // Send individual ground item creation events for each dropped item
+            for (const droppedItem of droppedItems) {
+              await apig
+                .postToConnection({
+                  ConnectionId: targetConnectionId,
+                  Data: JSON.stringify({
+                    type: "groundItemCreated",
+                    groundItem: droppedItem,
+                    timestamp: Date.now(),
+                  }),
+                })
+                .promise();
+            }
+          } catch (e) {
+            console.log(`Couldn't send death/respawn message to ${targetConnectionId}:`, e);
+          }
         }
       }
 
@@ -766,6 +847,17 @@ exports.handler = async function (event, context) {
           harvest => harvest.playerId === connectionId
         );
 
+        // Get all ground items in the chatroom
+        const groundItemParams = {
+          TableName: DB,
+          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+          ExpressionAttributeValues: {
+            ":pk": bodyAsJSON.chatRoomId,
+            ":sk": "GROUND_ITEM#",
+          },
+        };
+        const groundItemData = await dynamodb.query(groundItemParams).promise();
+
         if (playerData.Item) {
           const gameState = {
             inventory: {
@@ -781,6 +873,16 @@ exports.handler = async function (event, context) {
               startTime: harvest.startTime,
               duration: harvest.duration,
               playerId: harvest.playerId,
+            })),
+            groundItems: groundItemData.Items.map(item => ({
+              id: item.SK,
+              itemType: item.itemType,
+              itemSubType: item.itemSubType,
+              quantity: item.quantity,
+              position: item.position,
+              droppedBy: item.droppedBy,
+              droppedAt: item.droppedAt,
+              droppedOnDeath: item.droppedOnDeath || false,
             })),
             health: playerData.Item.health || 30,
             position: playerData.Item.lastValidPosition || { x: 0, y: 0, z: 0 },
@@ -804,6 +906,199 @@ exports.handler = async function (event, context) {
         }
       } catch (e) {
         console.error("Error validating game state:", e);
+      }
+      break;
+
+    case "dropItem":
+      try {
+        const { itemType, itemSubType, quantity = 1, position } = bodyAsJSON;
+
+        if (!itemType || !position) {
+          console.error("Missing required fields for dropItem");
+          break;
+        }
+
+        // Get player's current inventory
+        const playerParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+        };
+
+        const playerData = await dynamodb.get(playerParams).promise();
+
+        if (!playerData.Item) {
+          console.error("Player not found for dropItem");
+          break;
+        }
+
+        // Check if player has the item to drop
+        const berryField = `berries_${itemSubType}`;
+        const currentQuantity = playerData.Item[berryField] || 0;
+
+        if (currentQuantity < quantity) {
+          console.error(`Player doesn't have enough ${itemSubType} to drop`);
+          break;
+        }
+
+        // Remove item from player's inventory
+        await dynamodb.update({
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+          UpdateExpression: `ADD ${berryField} :negQuantity, berries :negQuantity`,
+          ExpressionAttributeValues: {
+            ":negQuantity": -quantity,
+          },
+        }).promise();
+
+        // Create ground item
+        const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        await dynamodb.put({
+          TableName: DB,
+          Item: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: groundItemId,
+            itemType,
+            itemSubType,
+            quantity,
+            position,
+            droppedBy: connectionId,
+            droppedAt: Date.now(),
+            ttl: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
+          },
+        }).promise();
+
+        // Broadcast ground item creation to all players
+        const usersParams = {
+          TableName: DB,
+          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+          ExpressionAttributeValues: {
+            ":pk": bodyAsJSON.chatRoomId,
+            ":sk": "CONNECTION#",
+          },
+        };
+
+        const getConnections = await dynamodb.query(usersParams).promise();
+
+        for (const connection of getConnections.Items) {
+          const targetConnectionId = connection.SK.split("#")[1];
+          try {
+            await apig.postToConnection({
+              ConnectionId: targetConnectionId,
+              Data: JSON.stringify({
+                type: "groundItemCreated",
+                groundItem: {
+                  id: groundItemId,
+                  itemType,
+                  itemSubType,
+                  quantity,
+                  position,
+                  droppedBy: connectionId,
+                  droppedAt: Date.now(),
+                },
+                timestamp: Date.now(),
+              }),
+            }).promise();
+          } catch (e) {
+            console.log(`Couldn't send ground item creation to ${targetConnectionId}:`, e);
+          }
+        }
+
+        console.log(`Player ${connectionId} dropped ${quantity} ${itemSubType} at position`, position);
+
+      } catch (e) {
+        console.error("Error dropping item:", e);
+      }
+      break;
+
+    case "pickupItem":
+      try {
+        const { groundItemId } = bodyAsJSON;
+
+        if (!groundItemId) {
+          console.error("Missing groundItemId for pickupItem");
+          break;
+        }
+
+        // Get ground item
+        const groundItemParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: groundItemId,
+          },
+        };
+
+        const groundItemData = await dynamodb.get(groundItemParams).promise();
+
+        if (!groundItemData.Item) {
+          console.error("Ground item not found for pickup");
+          break;
+        }
+
+        const groundItem = groundItemData.Item;
+
+        // Add item to player's inventory
+        const berryField = `berries_${groundItem.itemSubType}`;
+        await dynamodb.update({
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+          UpdateExpression: `ADD ${berryField} :quantity, berries :quantity`,
+          ExpressionAttributeValues: {
+            ":quantity": groundItem.quantity,
+          },
+        }).promise();
+
+        // Remove ground item
+        await dynamodb.delete({
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: groundItemId,
+          },
+        }).promise();
+
+        // Broadcast ground item removal to all players
+        const usersParams = {
+          TableName: DB,
+          KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
+          ExpressionAttributeValues: {
+            ":pk": bodyAsJSON.chatRoomId,
+            ":sk": "CONNECTION#",
+          },
+        };
+
+        const getConnections = await dynamodb.query(usersParams).promise();
+
+        for (const connection of getConnections.Items) {
+          const targetConnectionId = connection.SK.split("#")[1];
+          try {
+            await apig.postToConnection({
+              ConnectionId: targetConnectionId,
+              Data: JSON.stringify({
+                type: "groundItemRemoved",
+                groundItemId,
+                pickedUpBy: connectionId,
+                timestamp: Date.now(),
+              }),
+            }).promise();
+          } catch (e) {
+            console.log(`Couldn't send ground item removal to ${targetConnectionId}:`, e);
+          }
+        }
+
+        console.log(`Player ${connectionId} picked up ${groundItem.quantity} ${groundItem.itemSubType}`);
+
+      } catch (e) {
+        console.error("Error picking up item:", e);
       }
       break;
   }

@@ -314,3 +314,27 @@ export const useLoadingStore = create((set, get) => ({
     startTime: Date.now()
   })
 }));
+
+export const useGroundItemsStore = create((set, get) => ({
+  groundItems: [],
+
+  addGroundItem: (groundItem) =>
+    set((state) => ({
+      groundItems: [...state.groundItems, groundItem],
+    })),
+
+  removeGroundItem: (groundItemId) =>
+    set((state) => ({
+      groundItems: state.groundItems.filter((item) => item.id !== groundItemId),
+    })),
+
+  clearGroundItems: () =>
+    set(() => ({
+      groundItems: [],
+    })),
+
+  syncGroundItems: (groundItems) =>
+    set(() => ({
+      groundItems: groundItems,
+    })),
+}));

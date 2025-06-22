@@ -9,10 +9,11 @@ import Api from "../Api";
 import RenderNPC from "./RenderNPC";
 import AlphaIsland from "./AlphaIsland";
 import ClickDropdown from "../ClickDropdown";
-import { useChatStore, useUserInputStore, useLoadingStore } from "../../store";
+import { useChatStore, useUserInputStore, useLoadingStore, useGroundItemsStore } from "../../store";
 import UIComponents from "../UIComponents";
 import BerryTree from "./BerryTree";
 import LoadingScreen from "../LoadingScreen";
+import GroundItem from "./GroundItem";
 
 // react three fiber docs
 // https://docs.pmnd.rs/react-three-fiber/api/objects
@@ -23,6 +24,7 @@ const GameComponent = () => {
     (state: any) => state.clickedOtherObject
   );
   const { isLoading } = useLoadingStore();
+  const groundItems = useGroundItemsStore((state: any) => state.groundItems);
 
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
@@ -39,6 +41,9 @@ const GameComponent = () => {
           <BerryTree position={[15, 0, 5]} treeId="tree_strawberry" berryType="strawberry" />
           <BerryTree position={[5, 0, 10]} treeId="tree_greenberry" berryType="greenberry" />
           <BerryTree position={[-5, 0, 5]} treeId="tree_goldberry" berryType="goldberry" />
+          {groundItems.map((groundItem: any) => (
+            <GroundItem key={groundItem.id} groundItem={groundItem} />
+          ))}
           <RenderNPC isCombatable={false} />
           <RenderOnlineUsers />
           <PlayerController
