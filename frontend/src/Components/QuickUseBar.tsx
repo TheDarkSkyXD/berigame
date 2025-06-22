@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useHUDStore, useUserStateStore, useWebsocketStore, useInventoryStore, useChatStore } from '../store';
+import { useQuickUseBarStore, useUserStateStore, useWebsocketStore, useInventoryStore, useChatStore } from '../store';
 import QuickUseSlot from './QuickUseSlot';
 
-const HUD: React.FC = () => {
-  const hudRef = useRef<HTMLDivElement>(null);
+const QuickUseBar: React.FC = () => {
+  const quickUseBarRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
@@ -17,7 +17,7 @@ const HUD: React.FC = () => {
     clearQuickUseSlot, 
     toggleVisibility,
     initializePosition 
-  } = useHUDStore();
+  } = useQuickUseBarStore();
   
   const health = useUserStateStore((state) => state.health);
   const maxHealth = useUserStateStore((state) => state.maxHealth);
@@ -35,12 +35,12 @@ const HUD: React.FC = () => {
     // Check if any quick-use slot items no longer exist in inventory
     quickUseSlots.forEach((slotItem, index) => {
       if (slotItem) {
-        const stillExists = items.find(invItem =>
-          invItem.id === slotItem.id &&
-          invItem.type === slotItem.type &&
+        const stillExists = items.find(invItem => 
+          invItem.id === slotItem.id && 
+          invItem.type === slotItem.type && 
           invItem.subType === slotItem.subType
         );
-
+        
         if (!stillExists) {
           clearQuickUseSlot(index);
         } else if (stillExists.quantity !== slotItem.quantity) {
@@ -55,14 +55,14 @@ const HUD: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (focusedChat) return; // Don't handle shortcuts when chat is focused
-
-      // Toggle HUD visibility with 'H'
-      if (e.key === 'h' || e.key === 'H') {
+      
+      // Toggle quick use bar visibility with 'Ctrl+H'
+      if (e.key === 'h' && e.ctrlKey) {
         e.preventDefault();
         toggleVisibility();
         return;
       }
-
+      
       // Quick use slots with number keys 1, 2, 3
       if (e.key >= '1' && e.key <= '3') {
         e.preventDefault();
@@ -78,44 +78,52 @@ const HUD: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleVisibility, focusedChat, quickUseSlots]);
 
-  // Mouse drag handlers
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.target === hudRef.current || (e.target as HTMLElement).classList.contains('hud-header')) {
+  // Mouse and touch drag handlers
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (e.target === quickUseBarRef.current || (e.target as HTMLElement).classList.contains('quick-use-bar-header')) {
       setIsDragging(true);
-      const rect = hudRef.current?.getBoundingClientRect();
+      const rect = quickUseBarRef.current?.getBoundingClientRect();
       if (rect) {
+        const clientX = e.clientX;
+        const clientY = e.clientY;
         setDragOffset({
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top
+          x: clientX - rect.left,
+          y: clientY - rect.top
         });
       }
+      e.preventDefault(); // Prevent text selection
     }
   };
 
-  const handleMouseMove = (e: MouseEvent) => {
+  const handlePointerMove = (e: PointerEvent) => {
     if (isDragging) {
-      const newX = Math.max(0, Math.min(window.innerWidth - 200, e.clientX - dragOffset.x));
-      const newY = Math.max(0, Math.min(window.innerHeight - 100, e.clientY - dragOffset.y));
+      const clientX = e.clientX;
+      const clientY = e.clientY;
+      const maxWidth = window.innerWidth - 200; // Account for component width
+      const maxHeight = window.innerHeight - 80; // Account for component height
+      
+      const newX = Math.max(0, Math.min(maxWidth, clientX - dragOffset.x));
+      const newY = Math.max(0, Math.min(maxHeight, clientY - dragOffset.y));
       setPosition({ x: newX, y: newY });
     }
   };
 
-  const handleMouseUp = () => {
+  const handlePointerUp = () => {
     setIsDragging(false);
   };
 
   useEffect(() => {
     if (isDragging) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener('pointermove', handlePointerMove);
+      document.addEventListener('pointerup', handlePointerUp);
       return () => {
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
+        document.removeEventListener('pointermove', handlePointerMove);
+        document.removeEventListener('pointerup', handlePointerUp);
       };
     }
   }, [isDragging, dragOffset]);
 
-  // Berry consumption logic (reused from Inventory component)
+  // Berry consumption logic (reused from original HUD)
   const consumeBerry = (item: any) => {
     if (!item || item.type !== 'berry') return;
 
@@ -156,34 +164,34 @@ const HUD: React.FC = () => {
   if (!isVisible) {
     return (
       <button
-        className="hud-toggle-button"
+        className="quick-use-bar-toggle-button"
         onClick={toggleVisibility}
         style={{
           position: 'fixed',
-          top: '10px',
+          top: '50px',
           left: '10px',
           zIndex: 1000,
-          padding: '8px 12px',
+          padding: '6px 10px',
           background: 'rgba(0, 0, 0, 0.7)',
           color: 'white',
           border: '1px solid #555',
           borderRadius: '4px',
           cursor: 'pointer',
-          fontSize: '12px'
+          fontSize: '11px',
+          minHeight: '32px',
+          minWidth: '60px'
         }}
-        title="Show HUD (H)"
+        title="Show Quick Use Bar (Ctrl+H)"
       >
-        Show HUD
+        Items
       </button>
     );
   }
 
-  const healthPercentage = (health / maxHealth) * 100;
-
   return (
     <div
-      ref={hudRef}
-      className="hud-container"
+      ref={quickUseBarRef}
+      className="quick-use-bar-container"
       style={{
         position: 'fixed',
         left: `${position.x}px`,
@@ -192,28 +200,28 @@ const HUD: React.FC = () => {
         background: 'rgba(0, 0, 0, 0.8)',
         border: '2px solid #444',
         borderRadius: '8px',
-        padding: '12px',
-        minWidth: '200px',
+        padding: '8px 12px',
         cursor: isDragging ? 'grabbing' : 'grab',
         userSelect: 'none',
-        pointerEvents: 'all'
+        pointerEvents: 'all',
+        touchAction: 'none' // Prevent default touch behaviors
       }}
-      onMouseDown={handleMouseDown}
+      onPointerDown={handlePointerDown}
     >
       {/* Header with close button */}
       <div 
-        className="hud-header" 
+        className="quick-use-bar-header" 
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: '8px',
+          marginBottom: '6px',
           color: 'white',
-          fontSize: '12px',
+          fontSize: '11px',
           fontWeight: 'bold'
         }}
       >
-        <span>HUD</span>
+        <span>Quick Use</span>
         <button
           onClick={toggleVisibility}
           style={{
@@ -221,78 +229,45 @@ const HUD: React.FC = () => {
             border: 'none',
             color: 'white',
             cursor: 'pointer',
-            fontSize: '14px',
-            padding: '2px 6px'
+            fontSize: '12px',
+            padding: '2px 4px',
+            minHeight: '20px',
+            minWidth: '20px'
           }}
-          title="Hide HUD (H)"
+          title="Hide Quick Use Bar (Ctrl+H)"
         >
           ×
         </button>
       </div>
 
-      {/* Health Bar */}
-      <div style={{ marginBottom: '12px' }}>
-        <div style={{
-          color: 'white',
-          fontSize: '11px',
-          marginBottom: '4px'
-        }}>
-          Health: {health}/{maxHealth}
-        </div>
-        <div style={{
-          width: '100%',
-          height: '16px',
-          background: '#333',
-          borderRadius: '8px',
-          overflow: 'hidden',
-          border: '1px solid #555'
-        }}>
-          <div style={{
-            width: `${healthPercentage}%`,
-            height: '100%',
-            background: healthPercentage > 60 ? '#4CAF50' : healthPercentage > 30 ? '#FF9800' : '#F44336',
-            transition: 'width 0.3s ease, background-color 0.3s ease'
-          }} />
-        </div>
-      </div>
-
       {/* Quick Use Slots */}
-      <div style={{ marginBottom: '8px' }}>
-        <div style={{
-          color: 'white',
-          fontSize: '11px',
-          marginBottom: '6px'
-        }}>
-          Quick Use:
-        </div>
-        <div style={{
-          display: 'flex',
-          gap: '6px'
-        }}>
-          {quickUseSlots.map((item, index) => (
-            <QuickUseSlot
-              key={index}
-              item={item}
-              slotIndex={index}
-              onItemUse={consumeBerry}
-              onDrop={handleSlotDrop}
-              onDragOver={handleDragOver}
-            />
-          ))}
-        </div>
+      <div style={{
+        display: 'flex',
+        gap: '6px',
+        marginBottom: '4px'
+      }}>
+        {quickUseSlots.map((item, index) => (
+          <QuickUseSlot
+            key={index}
+            item={item}
+            slotIndex={index}
+            onItemUse={consumeBerry}
+            onDrop={handleSlotDrop}
+            onDragOver={handleDragOver}
+          />
+        ))}
       </div>
 
       {/* Instructions */}
       <div style={{
         color: '#aaa',
-        fontSize: '9px',
-        textAlign: 'center',
-        marginTop: '4px'
+        fontSize: '8px',
+        textAlign: 'center'
       }}>
-        Drag berries here • 1,2,3 to use • H to toggle
+        1,2,3 to use • Ctrl+H to toggle
       </div>
     </div>
   );
 };
 
-export default HUD;
+export default QuickUseBar;

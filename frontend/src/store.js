@@ -254,9 +254,40 @@ export const useHarvestStore = create((set, get) => ({
   },
 }));
 
-export const useHUDStore = create((set, get) => ({
+export const useHealthBarStore = create((set, get) => ({
   isVisible: true,
   position: { x: 20, y: 20 }, // Default position
+  isDragging: false,
+
+  setVisible: (isVisible) => set({ isVisible }),
+
+  setPosition: (position) => {
+    set({ position });
+    // Save to localStorage for persistence
+    localStorage.setItem('healthBarPosition', JSON.stringify(position));
+  },
+
+  setDragging: (isDragging) => set({ isDragging }),
+
+  // Initialize position from localStorage
+  initializePosition: () => {
+    const savedPosition = localStorage.getItem('healthBarPosition');
+    if (savedPosition) {
+      try {
+        const position = JSON.parse(savedPosition);
+        set({ position });
+      } catch (e) {
+        console.warn('Failed to parse saved health bar position');
+      }
+    }
+  },
+
+  toggleVisibility: () => set((state) => ({ isVisible: !state.isVisible })),
+}));
+
+export const useQuickUseBarStore = create((set, get) => ({
+  isVisible: true,
+  position: { x: 20, y: 80 }, // Default position below health bar
   quickUseSlots: [null, null, null], // Three quick-use slots
   isDragging: false,
 
@@ -265,7 +296,7 @@ export const useHUDStore = create((set, get) => ({
   setPosition: (position) => {
     set({ position });
     // Save to localStorage for persistence
-    localStorage.setItem('hudPosition', JSON.stringify(position));
+    localStorage.setItem('quickUseBarPosition', JSON.stringify(position));
   },
 
   setQuickUseSlot: (slotIndex, item) => set((state) => {
@@ -284,13 +315,13 @@ export const useHUDStore = create((set, get) => ({
 
   // Initialize position from localStorage
   initializePosition: () => {
-    const savedPosition = localStorage.getItem('hudPosition');
+    const savedPosition = localStorage.getItem('quickUseBarPosition');
     if (savedPosition) {
       try {
         const position = JSON.parse(savedPosition);
         set({ position });
       } catch (e) {
-        console.warn('Failed to parse saved HUD position');
+        console.warn('Failed to parse saved quick use bar position');
       }
     }
   },
