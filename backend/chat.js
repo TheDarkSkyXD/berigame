@@ -132,7 +132,7 @@ exports.handler = async function (event, context) {
       console.log(`Player ${connectionId} respawned successfully, dropped ${droppedItems.length} item stacks`);
 
       // 2. Get all connections to broadcast death/respawn event
-      const usersParams = {
+      const deathUsersParams = {
         TableName: process.env.DB,
         KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
         ExpressionAttributeValues: {
@@ -141,7 +141,7 @@ exports.handler = async function (event, context) {
         },
       };
 
-      const getConnections = await dynamodb.query(usersParams).promise();
+      const getConnections = await dynamodb.query(deathUsersParams).promise();
 
       // 3. Broadcast death/respawn event and dropped items to all connected players
       const deathMessage = {
@@ -1035,35 +1035,7 @@ exports.handler = async function (event, context) {
             SK: "CONNECTION#" + connectionId,
           },
         };
-		const playerData = await dynamodb.get(playerParams).promise();
-        if (playerData.Item) {
-          // For now, we'll just acknowledge the move since the current backend
-          // stores inventory as berry counts rather than slot-based items
-          // In a full implementation, we'd need to restructure the backend
-          // to support slot-based inventory management
-
-          console.log(`Player ${connectionId} moved item from slot ${fromSlot} to slot ${toSlot}`);
-
-          // Send acknowledgment back to client
-          try {
-            await apig
-              .postToConnection({
-                ConnectionId: connectionId,
-                Data: JSON.stringify({
-                  inventoryMoveAck: true,
-                  fromSlot,
-                  toSlot,
-                  timestamp: Date.now(),
-                }),
-              })
-              .promise();
-          } catch (e) {
-            console.log("couldn't send inventory move acknowledgment to " + connectionId, e);
-          }
-        }
-      } catch (e) {
-        console.error("Error moving inventory item:", e);
-	  }
+        const playerData = await dynamodb.get(playerParams).promise();
 
         if (!playerData.Item) {
           console.error("Player not found for dropItem");
