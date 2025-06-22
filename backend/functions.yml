@@ -58,3 +58,5 @@ connectionHandler:
         route: requestInventorySync
     - websocket:
         route: validateGameState
+    - websocket:
+        route: moveInventoryItem

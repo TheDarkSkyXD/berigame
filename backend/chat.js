@@ -913,6 +913,57 @@ exports.handler = async function (event, context) {
         console.error("Error validating game state:", e);
       }
       break;
+
+    case "moveInventoryItem":
+      try {
+        const { fromSlot, toSlot } = bodyAsJSON;
+
+        // Validate slot indices
+        if (typeof fromSlot !== 'number' || typeof toSlot !== 'number' ||
+            fromSlot < 0 || toSlot < 0 || fromSlot >= 28 || toSlot >= 28) {
+          console.error("Invalid slot indices:", { fromSlot, toSlot });
+          break;
+        }
+
+        // Get player's current inventory state
+        const playerParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+        };
+        const playerData = await dynamodb.get(playerParams).promise();
+
+        if (playerData.Item) {
+          // For now, we'll just acknowledge the move since the current backend
+          // stores inventory as berry counts rather than slot-based items
+          // In a full implementation, we'd need to restructure the backend
+          // to support slot-based inventory management
+
+          console.log(`Player ${connectionId} moved item from slot ${fromSlot} to slot ${toSlot}`);
+
+          // Send acknowledgment back to client
+          try {
+            await apig
+              .postToConnection({
+                ConnectionId: connectionId,
+                Data: JSON.stringify({
+                  inventoryMoveAck: true,
+                  fromSlot,
+                  toSlot,
+                  timestamp: Date.now(),
+                }),
+              })
+              .promise();
+          } catch (e) {
+            console.log("couldn't send inventory move acknowledgment to " + connectionId, e);
+          }
+        }
+      } catch (e) {
+        console.error("Error moving inventory item:", e);
+      }
+      break;
   }
 
   // Return a 200 status to tell API Gateway the message was processed
