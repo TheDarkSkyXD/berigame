@@ -176,85 +176,10 @@ const Api = (props) => {
       // Handle inventory synchronization from backend
       if (messageObject.inventorySync || messageObject.inventoryValidation) {
         const inventory = messageObject.inventory;
-        const berryConfigs = {
-          blueberry: { name: 'Blueberry', icon: '/blueberry.svg' },
-          strawberry: { name: 'Strawberry', icon: '/strawberry.svg' },
-          greenberry: { name: 'Greenberry', icon: '/greenberry.svg' },
-          goldberry: { name: 'Goldberry', icon: '/goldberry.svg' },
-        };
 
-        // Smart inventory sync that preserves item positions
-        const { items } = useInventoryStore.getState();
-        const currentItems = [...items]; // Create a copy to work with
-
-        // Update existing berry quantities and remove excess
-        Object.keys(berryConfigs).forEach(berryType => {
-          const backendCount = inventory[`berries_${berryType}`] || 0;
-          const config = berryConfigs[berryType];
-
-          // Find all existing berries of this type
-          const existingBerries = [];
-          currentItems.forEach((item, index) => {
-            if (item && item.type === 'berry' && item.subType === berryType) {
-              existingBerries.push({ item, index });
-            }
-          });
-
-          // Calculate current total quantity
-          const currentTotal = existingBerries.reduce((sum, berry) => sum + (berry.item.quantity || 1), 0);
-
-          if (backendCount === 0) {
-            // Remove all berries of this type
-            existingBerries.forEach(berry => {
-              currentItems[berry.index] = null;
-            });
-          } else if (currentTotal !== backendCount) {
-            // Adjust quantities to match backend
-            if (existingBerries.length === 0) {
-              // No existing berries, add new ones to first available slot
-              const firstEmptySlot = currentItems.findIndex(item => !item);
-              if (firstEmptySlot !== -1) {
-                currentItems[firstEmptySlot] = {
-                  type: "berry",
-                  subType: berryType,
-                  name: config.name,
-                  icon: config.icon,
-                  quantity: backendCount,
-                  id: Date.now() + Math.random()
-                };
-              }
-            } else {
-              // Update existing berry quantities
-              let remainingCount = backendCount;
-
-              existingBerries.forEach((berry, berryIndex) => {
-                if (remainingCount > 0) {
-                  const assignedQuantity = Math.min(remainingCount, berry.item.quantity || 1);
-                  currentItems[berry.index] = {
-                    ...berry.item,
-                    quantity: assignedQuantity
-                  };
-                  remainingCount -= assignedQuantity;
-                } else {
-                  // Remove excess berries
-                  currentItems[berry.index] = null;
-                }
-              });
-
-              // If we still have remaining count, update the first berry stack
-              if (remainingCount > 0 && existingBerries.length > 0) {
-                const firstBerry = existingBerries[0];
-                currentItems[firstBerry.index] = {
-                  ...firstBerry.item,
-                  quantity: backendCount
-                };
-              }
-            }
-          }
-        });
-
-        // Update the inventory store with the modified items
-        useInventoryStore.setState({ items: currentItems });
+        // Use new setInventory method for clean sync
+        const { setInventory } = useInventoryStore.getState();
+        setInventory(inventory);
 
         const messageType = messageObject.inventoryValidation ? 'validated' : 'synchronized';
         console.log(`Inventory ${messageType} with backend:`, inventory);
@@ -274,68 +199,9 @@ const Api = (props) => {
         const gameState = messageObject.gameState;
         console.log('Received game state validation:', gameState);
 
-        // Sync inventory
-        const berryConfigs = {
-          blueberry: { name: 'Blueberry', icon: '/blueberry.svg' },
-          strawberry: { name: 'Strawberry', icon: '/strawberry.svg' },
-          greenberry: { name: 'Greenberry', icon: '/greenberry.svg' },
-          goldberry: { name: 'Goldberry', icon: '/goldberry.svg' },
-        };
-
-        // Smart inventory sync for game state validation
-        const { items: currentItems } = useInventoryStore.getState();
-        const updatedItems = [...currentItems];
-
-        // Update berry quantities to match game state
-        Object.keys(berryConfigs).forEach(berryType => {
-          const backendCount = gameState.inventory[`berries_${berryType}`] || 0;
-          const config = berryConfigs[berryType];
-
-          // Find existing berries of this type
-          const existingBerries = [];
-          updatedItems.forEach((item, index) => {
-            if (item && item.type === 'berry' && item.subType === berryType) {
-              existingBerries.push({ item, index });
-            }
-          });
-
-          const currentTotal = existingBerries.reduce((sum, berry) => sum + (berry.item.quantity || 1), 0);
-
-          if (backendCount === 0) {
-            // Remove all berries of this type
-            existingBerries.forEach(berry => {
-              updatedItems[berry.index] = null;
-            });
-          } else if (currentTotal !== backendCount) {
-            if (existingBerries.length === 0) {
-              // Add new berries to first available slot
-              const firstEmptySlot = updatedItems.findIndex(item => !item);
-              if (firstEmptySlot !== -1) {
-                updatedItems[firstEmptySlot] = {
-                  type: "berry",
-                  subType: berryType,
-                  name: config.name,
-                  icon: config.icon,
-                  quantity: backendCount,
-                  id: Date.now() + Math.random()
-                };
-              }
-            } else {
-              // Update first berry stack with correct quantity
-              updatedItems[existingBerries[0].index] = {
-                ...existingBerries[0].item,
-                quantity: backendCount
-              };
-              // Remove other stacks of the same berry type
-              for (let i = 1; i < existingBerries.length; i++) {
-                updatedItems[existingBerries[i].index] = null;
-              }
-            }
-          }
-        });
-
-        // Update inventory store
-        useInventoryStore.setState({ items: updatedItems });
+        // Sync inventory using new system
+        const { setInventory } = useInventoryStore.getState();
+        setInventory(gameState.inventory);
 
         // Sync harvest states
         const { activeHarvests, cancelHarvest, startHarvest } = useHarvestStore.getState();

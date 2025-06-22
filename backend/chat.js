@@ -5,6 +5,20 @@ const helpers = require("./helpers");
 const { getRounds } = require("bcryptjs");
 const { validCallbackObject } = require("./helpers");
 const PositionValidator = require("./positionValidator");
+const {
+  getPlayerInventory,
+  addItemToInventory,
+  removeItemFromInventory,
+  playerHasItem,
+  getPlayerItemCount,
+  createInventoryUpdateExpression,
+  createMigrationUpdateExpression,
+  consumeItem,
+  createGroundItemData,
+  groundItemToInventoryItem,
+  getInventorySyncData,
+  needsMigration
+} = require("./inventoryHelper");
 const apig = new AWS.ApiGatewayManagementApi({
   //Offline check for websocket issue with serverless offline
   //https://github.com/dherault/serverless-offline/issues/924
@@ -323,63 +337,59 @@ exports.handler = async function (event, context) {
         const player = playerData.Item;
         const deathPosition = player.lastValidPosition || SPAWN_LOCATION.position;
 
-        // Drop all inventory items at death location
-        const berryTypes = ['blueberry', 'strawberry', 'greenberry', 'goldberry'];
+        // Drop all inventory items at death location using new inventory system
+        const inventory = getPlayerInventory(player);
         const droppedItems = [];
 
-        for (const berryType of berryTypes) {
-          const berryField = `berries_${berryType}`;
-          const quantity = player[berryField] || 0;
+        // Get all non-empty slots and drop their contents
+        const slots = inventory.getSlots();
+        for (let i = 0; i < slots.length; i++) {
+          const slot = slots[i];
+          if (!slot.isEmpty()) {
+            const item = slot.getItem();
 
-          if (quantity > 0) {
-            // Create ground item for each berry type
+            // Create ground item data
+            const scatterPosition = {
+              x: deathPosition.x + (Math.random() - 0.5) * 2, // Scatter items slightly
+              y: deathPosition.y,
+              z: deathPosition.z + (Math.random() - 0.5) * 2,
+            };
+
             const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const groundItemData = createGroundItemData(
+              item.itemId,
+              item.quantity,
+              scatterPosition,
+              connectionId,
+              item.metadata
+            );
 
+            // Add death flag and save to database
+            groundItemData.droppedOnDeath = true;
             await dynamodb.put({
               TableName: process.env.DB,
               Item: {
                 PK: chatRoomId,
                 SK: groundItemId,
-                itemType: 'berry',
-                itemSubType: berryType,
-                quantity,
-                position: {
-                  x: deathPosition.x + (Math.random() - 0.5) * 2, // Scatter items slightly
-                  y: deathPosition.y,
-                  z: deathPosition.z + (Math.random() - 0.5) * 2,
-                },
-                droppedBy: connectionId,
-                droppedAt: Date.now(),
-                droppedOnDeath: true,
-                ttl: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
+                ...groundItemData,
               },
             }).promise();
 
             droppedItems.push({
               id: groundItemId,
-              itemType: 'berry',
-              itemSubType: berryType,
-              quantity,
-              position: {
-                x: deathPosition.x + (Math.random() - 0.5) * 2,
-                y: deathPosition.y,
-                z: deathPosition.z + (Math.random() - 0.5) * 2,
-              },
-              droppedBy: connectionId,
-              droppedAt: Date.now(),
-              droppedOnDeath: true,
+              ...groundItemData,
             });
           }
         }
 
-      // Reset player's inventory and health/position
+      // Reset player's inventory and health/position using new inventory system
       const respawnParams = {
         TableName: process.env.DB,
         Key: {
           PK: chatRoomId,
           SK: "CONNECTION#" + connectionId,
         },
-        UpdateExpression: "SET health = :health, #pos = :position, #rot = :rotation, berries = :zero, berries_blueberry = :zero, berries_strawberry = :zero, berries_greenberry = :zero, berries_goldberry = :zero",
+        UpdateExpression: "SET health = :health, #pos = :position, #rot = :rotation, inventory = :emptyInventory",
         ExpressionAttributeNames: {
           "#pos": "position",
           "#rot": "rotation"
@@ -388,7 +398,7 @@ exports.handler = async function (event, context) {
           ":health": MAX_HEALTH,
           ":position": SPAWN_LOCATION.position,
           ":rotation": SPAWN_LOCATION.rotation,
-          ":zero": 0,
+          ":emptyInventory": [], // Empty slot-based inventory
         },
       };
 
@@ -552,11 +562,7 @@ exports.handler = async function (event, context) {
             created: timestamp,
             ttl: Math.floor(new Date().getTime() / 1000) + 120, // 2 mins from now
             health: MAX_HEALTH,
-            berries: 0, // Initialize total berry count
-            berries_blueberry: 0,
-            berries_strawberry: 0,
-            berries_greenberry: 0,
-            berries_goldberry: 0,
+            inventory: [], // Initialize empty slot-based inventory
             // Position validation fields
             lastValidPosition: SPAWN_LOCATION.position,
             lastPositionUpdate: timestamp,
@@ -589,13 +595,29 @@ exports.handler = async function (event, context) {
       );
 
       if (playerConnection) {
-        const inventoryData = {
-          berries: playerConnection.berries || 0,
-          berries_blueberry: playerConnection.berries_blueberry || 0,
-          berries_strawberry: playerConnection.berries_strawberry || 0,
-          berries_greenberry: playerConnection.berries_greenberry || 0,
-          berries_goldberry: playerConnection.berries_goldberry || 0,
-        };
+        // Handle migration if needed and get inventory sync data
+        const inventoryData = getInventorySyncData(playerConnection);
+
+        // If migration was needed, update the database
+        if (needsMigration(playerConnection)) {
+          try {
+            const inventory = getPlayerInventory(playerConnection);
+            const updateExpression = createMigrationUpdateExpression(inventory);
+
+            await dynamodb.update({
+              TableName: DB,
+              Key: {
+                PK: playerConnection.PK,
+                SK: playerConnection.SK,
+              },
+              ...updateExpression
+            }).promise();
+
+            console.log(`Migrated inventory for player ${connectionId}`);
+          } catch (e) {
+            console.error(`Failed to migrate inventory for player ${connectionId}:`, e);
+          }
+        }
 
         try {
           await apig
@@ -797,21 +819,40 @@ exports.handler = async function (event, context) {
                 })
                 .promise();
 
-              // Add berry to player's inventory - update specific berry type counter
-              const berryField = `berries_${harvestBerryType}`;
-              await dynamodb
-                .update({
-                  TableName: DB,
-                  Key: {
-                    PK: bodyAsJSON.chatRoomId,
-                    SK: "CONNECTION#" + connectionId,
-                  },
-                  UpdateExpression: `ADD ${berryField} :val, berries :val`,
-                  ExpressionAttributeValues: {
-                    ":val": 1,
-                  },
-                })
-                .promise();
+              // Add berry to player's inventory using new system
+              const playerParams = {
+                TableName: DB,
+                Key: {
+                  PK: bodyAsJSON.chatRoomId,
+                  SK: "CONNECTION#" + connectionId,
+                },
+              };
+              const playerData = await dynamodb.get(playerParams).promise();
+
+              if (playerData.Item) {
+                // Map legacy berry type to new item ID
+                const { getLegacyBerryItemId } = require('../shared/itemDefinitions.js');
+                const itemId = getLegacyBerryItemId(harvestBerryType);
+
+                if (itemId) {
+                  const result = addItemToInventory(playerData.Item, itemId, 1);
+
+                  if (result.success) {
+                    // Update inventory in database
+                    const updateExpression = createInventoryUpdateExpression(result.inventory);
+                    await dynamodb.update({
+                      TableName: DB,
+                      Key: {
+                        PK: bodyAsJSON.chatRoomId,
+                        SK: "CONNECTION#" + connectionId,
+                      },
+                      ...updateExpression
+                    }).promise();
+                  } else {
+                    console.error(`Failed to add ${itemId} to inventory: ${result.error}`);
+                  }
+                }
+              }
 
               // Broadcast harvest completion in parallel
               const connectionsForCompletion = await getCachedConnections(bodyAsJSON.chatRoomId);
@@ -874,21 +915,40 @@ exports.handler = async function (event, context) {
             })
             .promise();
 
-          // Add berry to player's inventory
-          const berryField = `berries_${harvestBerryType}`;
-          await dynamodb
-            .update({
-              TableName: DB,
-              Key: {
-                PK: bodyAsJSON.chatRoomId,
-                SK: "CONNECTION#" + connectionId,
-              },
-              UpdateExpression: `ADD ${berryField} :val, berries :val`,
-              ExpressionAttributeValues: {
-                ":val": 1,
-              },
-            })
-            .promise();
+          // Add berry to player's inventory using new system
+          const playerParams = {
+            TableName: DB,
+            Key: {
+              PK: bodyAsJSON.chatRoomId,
+              SK: "CONNECTION#" + connectionId,
+            },
+          };
+          const playerData = await dynamodb.get(playerParams).promise();
+
+          if (playerData.Item) {
+            // Map legacy berry type to new item ID
+            const { getLegacyBerryItemId } = require('../shared/itemDefinitions.js');
+            const itemId = getLegacyBerryItemId(harvestBerryType);
+
+            if (itemId) {
+              const result = addItemToInventory(playerData.Item, itemId, 1);
+
+              if (result.success) {
+                // Update inventory in database
+                const updateExpression = createInventoryUpdateExpression(result.inventory);
+                await dynamodb.update({
+                  TableName: DB,
+                  Key: {
+                    PK: bodyAsJSON.chatRoomId,
+                    SK: "CONNECTION#" + connectionId,
+                  },
+                  ...updateExpression
+                }).promise();
+              } else {
+                console.error(`Failed to add ${itemId} to inventory: ${result.error}`);
+              }
+            }
+          }
 
           // Get all connections to broadcast completion
           const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
@@ -961,48 +1021,37 @@ exports.handler = async function (event, context) {
 
         if (playerData.Item) {
           const currentHealth = playerData.Item.health || 0;
-          const berryField = `berries_${berryType}`;
-          const berryCount = playerData.Item[berryField] || 0;
 
-          // Check if player has the berry
-          if (berryCount <= 0) {
+          // Map legacy berry type to new item ID
+          const { getLegacyBerryItemId } = require('../shared/itemDefinitions.js');
+          const itemId = getLegacyBerryItemId(berryType);
+
+          if (!itemId) {
+            console.error(`Invalid berry type: ${berryType}`);
             break;
           }
 
-          // Calculate health restoration based on berry type
-          let healthRestore = 0;
-          switch (berryType) {
-            case 'blueberry':
-              healthRestore = 5;
-              break;
-            case 'strawberry':
-            case 'greenberry':
-            case 'goldberry':
-              // Placeholder for other berry types
-              healthRestore = 1;
-              break;
-            default:
-              healthRestore = 1;
+          // Use new inventory system to consume berry
+          const consumeResult = consumeItem(playerData.Item, itemId, currentHealth, MAX_HEALTH);
+
+          if (!consumeResult.success) {
+            console.error(`Failed to consume ${itemId}: ${consumeResult.error}`);
+            break;
           }
 
-          // Calculate new health (don't exceed max)
-          const newHealth = Math.min(currentHealth + healthRestore, MAX_HEALTH);
+          // Update player's health and inventory in database
+          const updateExpression = createInventoryUpdateExpression(consumeResult.inventory);
+          updateExpression.UpdateExpression = `SET health = :newHealth, ${updateExpression.UpdateExpression.substring(4)}`; // Remove "SET " and prepend health
+          updateExpression.ExpressionAttributeValues[':newHealth'] = consumeResult.effect.newHealth;
 
-          // Update player's health and consume berry
-          await dynamodb
-            .update({
-              TableName: DB,
-              Key: {
-                PK: bodyAsJSON.chatRoomId,
-                SK: "CONNECTION#" + connectionId,
-              },
-              UpdateExpression: `SET health = :newHealth ADD ${berryField} :consumeVal, berries :consumeVal`,
-              ExpressionAttributeValues: {
-                ":newHealth": newHealth,
-                ":consumeVal": -1,
-              },
-            })
-            .promise();
+          await dynamodb.update({
+            TableName: DB,
+            Key: {
+              PK: bodyAsJSON.chatRoomId,
+              SK: "CONNECTION#" + connectionId,
+            },
+            ...updateExpression
+          }).promise();
 
           // Berry consumed successfully
 
@@ -1014,8 +1063,8 @@ exports.handler = async function (event, context) {
                 Data: JSON.stringify({
                   berryConsumed: true,
                   berryType: berryType,
-                  healthRestored: healthRestore,
-                  newHealth: newHealth,
+                  healthRestored: consumeResult.effect.healthRestored,
+                  newHealth: consumeResult.effect.newHealth,
                   timestamp: Date.now(),
                 }),
               })
@@ -1031,7 +1080,7 @@ exports.handler = async function (event, context) {
           const healthUpdateMessage = {
             playerHealthUpdate: true,
             playerId: connectionId,
-            newHealth: newHealth,
+            newHealth: consumeResult.effect.newHealth,
             timestamp: Date.now(),
             chatRoomId: bodyAsJSON.chatRoomId,
           };
@@ -1056,13 +1105,29 @@ exports.handler = async function (event, context) {
         const playerData = await dynamodb.get(playerParams).promise();
 
         if (playerData.Item) {
-          const serverInventory = {
-            berries: playerData.Item.berries || 0,
-            berries_blueberry: playerData.Item.berries_blueberry || 0,
-            berries_strawberry: playerData.Item.berries_strawberry || 0,
-            berries_greenberry: playerData.Item.berries_greenberry || 0,
-            berries_goldberry: playerData.Item.berries_goldberry || 0,
-          };
+          // Handle migration if needed and get inventory sync data
+          const inventoryData = getInventorySyncData(playerData.Item);
+
+          // If migration was needed, update the database
+          if (needsMigration(playerData.Item)) {
+            try {
+              const inventory = getPlayerInventory(playerData.Item);
+              const updateExpression = createMigrationUpdateExpression(inventory);
+
+              await dynamodb.update({
+                TableName: DB,
+                Key: {
+                  PK: playerData.Item.PK,
+                  SK: playerData.Item.SK,
+                },
+                ...updateExpression
+              }).promise();
+
+              console.log(`Migrated inventory for player ${connectionId} during validation`);
+            } catch (e) {
+              console.error(`Failed to migrate inventory for player ${connectionId}:`, e);
+            }
+          }
 
           // Send authoritative inventory state back to client
           try {
@@ -1071,7 +1136,7 @@ exports.handler = async function (event, context) {
                 ConnectionId: connectionId,
                 Data: JSON.stringify({
                   inventoryValidation: true,
-                  inventory: serverInventory,
+                  inventory: inventoryData,
                   timestamp: Date.now(),
                 }),
               })
@@ -1098,13 +1163,29 @@ exports.handler = async function (event, context) {
         const playerData = await dynamodb.get(playerParams).promise();
 
         if (playerData.Item) {
-          const serverInventory = {
-            berries: playerData.Item.berries || 0,
-            berries_blueberry: playerData.Item.berries_blueberry || 0,
-            berries_strawberry: playerData.Item.berries_strawberry || 0,
-            berries_greenberry: playerData.Item.berries_greenberry || 0,
-            berries_goldberry: playerData.Item.berries_goldberry || 0,
-          };
+          // Handle migration if needed and get inventory sync data
+          const inventoryData = getInventorySyncData(playerData.Item);
+
+          // If migration was needed, update the database
+          if (needsMigration(playerData.Item)) {
+            try {
+              const inventory = getPlayerInventory(playerData.Item);
+              const updateExpression = createMigrationUpdateExpression(inventory);
+
+              await dynamodb.update({
+                TableName: DB,
+                Key: {
+                  PK: playerData.Item.PK,
+                  SK: playerData.Item.SK,
+                },
+                ...updateExpression
+              }).promise();
+
+              console.log(`Migrated inventory for player ${connectionId} during sync`);
+            } catch (e) {
+              console.error(`Failed to migrate inventory for player ${connectionId}:`, e);
+            }
+          }
 
           try {
             await apig
@@ -1112,7 +1193,7 @@ exports.handler = async function (event, context) {
                 ConnectionId: connectionId,
                 Data: JSON.stringify({
                   inventorySync: true,
-                  inventory: serverInventory,
+                  inventory: inventoryData,
                   timestamp: Date.now(),
                 }),
               })
@@ -1174,14 +1255,32 @@ exports.handler = async function (event, context) {
         if (playerData.Item) {
           const processingStartTime = Date.now();
 
+          // Handle migration if needed and get inventory data
+          const inventoryData = getInventorySyncData(playerData.Item);
+
+          // If migration was needed, update the database
+          if (needsMigration(playerData.Item)) {
+            try {
+              const inventory = getPlayerInventory(playerData.Item);
+              const updateExpression = createMigrationUpdateExpression(inventory);
+
+              await dynamodb.update({
+                TableName: DB,
+                Key: {
+                  PK: playerData.Item.PK,
+                  SK: playerData.Item.SK,
+                },
+                ...updateExpression
+              }).promise();
+
+              console.log(`Migrated inventory for player ${connectionId} during game state validation`);
+            } catch (e) {
+              console.error(`Failed to migrate inventory for player ${connectionId}:`, e);
+            }
+          }
+
           const gameState = {
-            inventory: {
-              berries: playerData.Item.berries || 0,
-              berries_blueberry: playerData.Item.berries_blueberry || 0,
-              berries_strawberry: playerData.Item.berries_strawberry || 0,
-              berries_greenberry: playerData.Item.berries_greenberry || 0,
-              berries_goldberry: playerData.Item.berries_goldberry || 0,
-            },
+            inventory: inventoryData,
             activeHarvests: playerHarvests.map(harvest => ({
               treeId: harvest.treeId,
               berryType: harvest.berryType,
@@ -1251,10 +1350,10 @@ exports.handler = async function (event, context) {
 
     case "dropItem":
       try {
-        const { itemType, itemSubType, quantity = 1 } = bodyAsJSON;
+        const { itemId, quantity = 1 } = bodyAsJSON;
 
-        if (!itemType) {
-          console.error("Missing required fields for dropItem");
+        if (!itemId) {
+          console.error("Missing required itemId for dropItem");
           break;
         }
 
@@ -1277,42 +1376,40 @@ exports.handler = async function (event, context) {
         const verifiedPosition = playerData.Item.lastValidPosition || SPAWN_LOCATION.position;
         console.log(`Using server verified position for drop: ${JSON.stringify(verifiedPosition)} (player: ${connectionId})`);
 
-        // Check if player has the item to drop
-        const berryField = `berries_${itemSubType}`;
-        const currentQuantity = playerData.Item[berryField] || 0;
+        // Use new inventory system to remove item
+        const removeResult = removeItemFromInventory(playerData.Item, itemId, quantity);
 
-        if (currentQuantity < quantity) {
-          console.error(`Player doesn't have enough ${itemSubType} to drop`);
+        if (!removeResult.success) {
+          console.error(`Failed to remove ${quantity} ${itemId} from inventory: ${removeResult.error}`);
           break;
         }
 
-        // Remove item from player's inventory
+        // Update inventory in database
+        const updateExpression = createInventoryUpdateExpression(removeResult.inventory);
         await dynamodb.update({
           TableName: DB,
           Key: {
             PK: bodyAsJSON.chatRoomId,
             SK: "CONNECTION#" + connectionId,
           },
-          UpdateExpression: `ADD ${berryField} :negQuantity, berries :negQuantity`,
-          ExpressionAttributeValues: {
-            ":negQuantity": -quantity,
-          },
+          ...updateExpression
         }).promise();
 
         // Create ground item at server's verified position
         const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const groundItemData = createGroundItemData(
+          itemId,
+          quantity,
+          verifiedPosition,
+          connectionId
+        );
+
         await dynamodb.put({
           TableName: DB,
           Item: {
             PK: bodyAsJSON.chatRoomId,
             SK: groundItemId,
-            itemType,
-            itemSubType,
-            quantity,
-            position: verifiedPosition, // Use server's verified position
-            droppedBy: connectionId,
-            droppedAt: Date.now(),
-            ttl: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
+            ...groundItemData,
           },
         }).promise();
 
@@ -1323,12 +1420,7 @@ exports.handler = async function (event, context) {
           type: "groundItemCreated",
           groundItem: {
             id: groundItemId,
-            itemType,
-            itemSubType,
-            quantity,
-            position: verifiedPosition, // Use server's verified position
-            droppedBy: connectionId,
-            droppedAt: Date.now(),
+            ...groundItemData,
           },
           timestamp: Date.now(),
           chatRoomId: bodyAsJSON.chatRoomId,
@@ -1336,7 +1428,7 @@ exports.handler = async function (event, context) {
 
         await broadcastToConnections(connections, groundItemMessage);
 
-        console.log(`Player ${connectionId} dropped ${quantity} ${itemSubType} at verified position`, verifiedPosition);
+        console.log(`Player ${connectionId} dropped ${quantity} ${itemId} at verified position`, verifiedPosition);
 
       } catch (e) {
         console.error("Error dropping item:", e);
@@ -1370,18 +1462,46 @@ exports.handler = async function (event, context) {
 
         const groundItem = groundItemData.Item;
 
-        // Add item to player's inventory
-        const berryField = `berries_${groundItem.itemSubType}`;
+        // Get player data for inventory update
+        const playerParams = {
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+        };
+        const playerData = await dynamodb.get(playerParams).promise();
+
+        if (!playerData.Item) {
+          console.error("Player not found for pickupItem");
+          break;
+        }
+
+        // Convert ground item to inventory item format
+        const inventoryItem = groundItemToInventoryItem(groundItem);
+
+        // Add item to player's inventory using new system
+        const addResult = addItemToInventory(
+          playerData.Item,
+          inventoryItem.itemId,
+          inventoryItem.quantity,
+          inventoryItem.metadata
+        );
+
+        if (!addResult.success) {
+          console.error(`Failed to add ${inventoryItem.itemId} to inventory: ${addResult.error}`);
+          break;
+        }
+
+        // Update inventory in database
+        const updateExpression = createInventoryUpdateExpression(addResult.inventory);
         await dynamodb.update({
           TableName: DB,
           Key: {
             PK: bodyAsJSON.chatRoomId,
             SK: "CONNECTION#" + connectionId,
           },
-          UpdateExpression: `ADD ${berryField} :quantity, berries :quantity`,
-          ExpressionAttributeValues: {
-            ":quantity": groundItem.quantity,
-          },
+          ...updateExpression
         }).promise();
 
         // Remove ground item
@@ -1406,7 +1526,7 @@ exports.handler = async function (event, context) {
 
         await broadcastToConnections(connections, groundItemRemovalMessage);
 
-        logger.debug(`Player ${connectionId} picked up ${groundItem.quantity} ${groundItem.itemSubType}`);
+        logger.debug(`Player ${connectionId} picked up ${inventoryItem.quantity} ${inventoryItem.itemId}`);
 
       } catch (e) {
         logger.error("Error picking up item:", e);

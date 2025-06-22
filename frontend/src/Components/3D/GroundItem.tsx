@@ -3,12 +3,19 @@ import { useUserInputStore, useWebsocketStore, useInventoryStore, useGroundItems
 import { webSocketPickupItem } from "../../Api";
 import { Html } from "@react-three/drei";
 
-// Berry type configurations
-const BERRY_TYPES = {
-  blueberry: { color: '#4F46E5', name: 'Blueberry', icon: '/blueberry.svg' },
-  strawberry: { color: '#EF4444', name: 'Strawberry', icon: '/strawberry.svg' },
-  greenberry: { color: '#22C55E', name: 'Greenberry', icon: '/greenberry.svg' },
-  goldberry: { color: '#F59E0B', name: 'Goldberry', icon: '/goldberry.svg' },
+// Item type configurations - supports both legacy and new format
+const ITEM_CONFIGS = {
+  // Legacy berry types
+  blueberry: { color: '#4F46E5', name: 'Blueberry', icon: '/blueberry.svg', category: 'berry' },
+  strawberry: { color: '#EF4444', name: 'Strawberry', icon: '/strawberry.svg', category: 'berry' },
+  greenberry: { color: '#22C55E', name: 'Greenberry', icon: '/greenberry.svg', category: 'berry' },
+  goldberry: { color: '#F59E0B', name: 'Goldberry', icon: '/goldberry.svg', category: 'berry' },
+
+  // New item ID format
+  berry_blueberry: { color: '#4F46E5', name: 'Blueberry', icon: '/blueberry.svg', category: 'berry' },
+  berry_strawberry: { color: '#EF4444', name: 'Strawberry', icon: '/strawberry.svg', category: 'berry' },
+  berry_greenberry: { color: '#22C55E', name: 'Greenberry', icon: '/greenberry.svg', category: 'berry' },
+  berry_goldberry: { color: '#F59E0B', name: 'Goldberry', icon: '/goldberry.svg', category: 'berry' },
 };
 
 interface GroundItemProps {
@@ -32,7 +39,9 @@ const GroundItem: React.FC<GroundItemProps> = ({ groundItem }) => {
   const addItem = useInventoryStore((state: any) => state.addItem);
   const markItemBeingPickedUp = useGroundItemsStore((state: any) => state.markItemBeingPickedUp);
 
-  const berryConfig = BERRY_TYPES[groundItem.itemSubType as keyof typeof BERRY_TYPES] || BERRY_TYPES.blueberry;
+  // Get item configuration - try new itemId first, then fall back to legacy itemSubType
+  const itemKey = groundItem.itemId || groundItem.itemSubType;
+  const itemConfig = ITEM_CONFIGS[itemKey as keyof typeof ITEM_CONFIGS] || ITEM_CONFIGS.blueberry;
 
   const pickupItem = () => {
     if (!websocketConnection) return;
@@ -41,11 +50,11 @@ const GroundItem: React.FC<GroundItemProps> = ({ groundItem }) => {
 
     // Optimistically add item to inventory for immediate feedback
     const inventoryItem = {
-      type: 'berry',
-      subType: groundItem.itemSubType,
-      name: berryConfig.name,
+      type: itemConfig.category,
+      subType: groundItem.itemId || groundItem.itemSubType, // Use new itemId if available
+      name: itemConfig.name,
       quantity: groundItem.quantity,
-      icon: berryConfig.icon || '/berry.svg',
+      icon: itemConfig.icon || '/berry.svg',
     };
 
     addItem(inventoryItem);
@@ -68,7 +77,7 @@ const GroundItem: React.FC<GroundItemProps> = ({ groundItem }) => {
       e,
       dropdownOptions: [
         {
-          label: `Pick up ${groundItem.quantity}x ${berryConfig.name}`,
+          label: `Pick up ${groundItem.quantity}x ${itemConfig.name}`,
           onClick: pickupItem,
           disabled: false,
         },
@@ -88,8 +97,8 @@ const GroundItem: React.FC<GroundItemProps> = ({ groundItem }) => {
       <mesh>
         <sphereGeometry args={[0.15, 8, 8]} />
         <meshStandardMaterial
-          color={berryConfig.color}
-          emissive={isHovered ? berryConfig.color : '#000000'}
+          color={itemConfig.color}
+          emissive={isHovered ? itemConfig.color : '#000000'}
           emissiveIntensity={isHovered ? 0.2 : 0}
         />
       </mesh>
@@ -140,10 +149,10 @@ const GroundItem: React.FC<GroundItemProps> = ({ groundItem }) => {
               fontSize: '11px',
               textAlign: 'center',
               whiteSpace: 'nowrap',
-              border: `1px solid ${berryConfig.color}`,
+              border: `1px solid ${itemConfig.color}`,
             }}
           >
-            {groundItem.quantity}x {berryConfig.name}
+            {groundItem.quantity}x {itemConfig.name}
             {groundItem.droppedOnDeath && (
               <div style={{ fontSize: '9px', opacity: 0.7 }}>
                 💀 Dropped on death

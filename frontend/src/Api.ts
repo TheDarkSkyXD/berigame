@@ -177,9 +177,19 @@ export const webSocketValidateGameState = async (ws: any) => {
 
 export const webSocketDropItem = async (itemType: string, itemSubType: string, quantity: number, ws: any) => {
   try {
+    // Map legacy berry types to new item IDs
+    const legacyBerryMapping = {
+      'blueberry': 'berry_blueberry',
+      'strawberry': 'berry_strawberry',
+      'greenberry': 'berry_greenberry',
+      'goldberry': 'berry_goldberry'
+    };
+
+    // Use new itemId format, fallback to subType for backward compatibility
+    const itemId = legacyBerryMapping[itemSubType] || itemSubType;
+
     const payload = {
-      itemType,
-      itemSubType,
+      itemId,
       quantity,
       chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
       action: "dropItem",

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useInventoryStore, useGroundItemsStore } from '../store';
 
 describe('Inventory Store Drag and Drop', () => {
@@ -89,15 +89,15 @@ describe('Inventory Store Drag and Drop', () => {
     expect(stateAfter.items).toEqual(stateBefore.items);
   });
 
-  it('should expand array when moving to higher slot indices', () => {
+  it('should handle moving within fixed 28-slot array', () => {
     const item = { id: 1, type: 'berry', subType: 'blueberry', name: 'Blueberry' };
     store.addItem(item);
 
-    // Move to slot 10 (should expand array)
+    // Move to slot 10 (within 28-slot limit)
     store.moveItem(0, 10);
 
     const state = useInventoryStore.getState();
-    expect(state.items.length).toBeGreaterThan(10);
+    expect(state.items.length).toBe(28); // Fixed array size
     expect(state.items[10]).toMatchObject({ type: 'berry', subType: 'blueberry' });
     expect(state.items[0]).toBeNull();
   });
@@ -149,10 +149,87 @@ describe('Inventory Store Drag and Drop', () => {
     store.removeItem(item1Id);
 
     state = useInventoryStore.getState();
-    const blueberryCount = store.getItemCount('berry', 'blueberry')(state);
-    const strawberryCount = store.getItemCount('berry', 'strawberry')(state);
+    const blueberryCount = store.getItemCount('berry', 'blueberry');
+    const strawberryCount = store.getItemCount('berry', 'strawberry');
     expect(blueberryCount).toBe(0); // Blueberry was removed
     expect(strawberryCount).toBe(2); // Strawberry should remain
+  });
+
+  it('should initialize with exactly 28 slots', () => {
+    const state = useInventoryStore.getState();
+    expect(state.items).toHaveLength(28);
+    expect(state.items.every(slot => slot === null)).toBe(true);
+  });
+
+  it('should handle setInventory with new slot-based format', () => {
+    const inventoryData = {
+      items: [
+        { id: 'item1', type: 'consumable', subType: 'berry_blueberry', name: 'Blueberry', icon: '/blueberry.svg', quantity: 5 },
+        null, // empty slot
+        { id: 'item2', type: 'consumable', subType: 'berry_strawberry', name: 'Strawberry', icon: '/strawberry.svg', quantity: 3 },
+      ]
+    };
+
+    store.setInventory(inventoryData);
+
+    const state = useInventoryStore.getState();
+    expect(state.items).toHaveLength(28);
+    expect(state.items[0]).toMatchObject({
+      type: 'consumable',
+      subType: 'berry_blueberry',
+      name: 'Blueberry',
+      quantity: 5
+    });
+    expect(state.items[1]).toBeNull();
+    expect(state.items[2]).toMatchObject({
+      type: 'consumable',
+      subType: 'berry_strawberry',
+      name: 'Strawberry',
+      quantity: 3
+    });
+  });
+
+  it('should handle inventory full scenario', () => {
+    // Fill all 28 slots
+    for (let i = 0; i < 28; i++) {
+      store.addItem({
+        type: 'berry',
+        subType: `berry_${i}`,
+        name: `Berry ${i}`,
+        quantity: 1
+      });
+    }
+
+    let state = useInventoryStore.getState();
+    expect(state.items.filter(item => item !== null)).toHaveLength(28);
+
+    // Try to add one more item - should fail gracefully
+    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    store.addItem({ type: 'berry', subType: 'overflow_berry', name: 'Overflow Berry', quantity: 1 });
+
+    state = useInventoryStore.getState();
+    expect(state.items.filter(item => item !== null)).toHaveLength(28); // Still 28
+    expect(consoleSpy).toHaveBeenCalledWith('Inventory is full, cannot add item:', expect.any(Object));
+
+    consoleSpy.mockRestore();
+  });
+
+  it('should handle backward compatibility with legacy format', () => {
+    const inventoryData = {
+      items: [
+        { id: 'item1', type: 'berry', subType: 'blueberry', name: 'Blueberry', icon: '/blueberry.svg', quantity: 5 },
+      ]
+    };
+
+    store.setInventory(inventoryData);
+
+    const state = useInventoryStore.getState();
+    expect(state.items[0]).toMatchObject({
+      type: 'berry', // Should maintain legacy type
+      subType: 'blueberry', // Should maintain legacy subType
+      name: 'Blueberry',
+      quantity: 5
+    });
   });
 });
 
@@ -299,6 +376,59 @@ describe('Ground Items Store', () => {
     groundStore.confirmPickupCompleted('ground-item-1');
     state = useGroundItemsStore.getState();
     expect(state.pendingPickups.has('ground-item-1')).toBe(false); // Item no longer pending
+  });
+
+  it('should handle new item format with itemId field', () => {
+    const groundItem = {
+      id: 'ground-item-1',
+      itemType: 'consumable',
+      itemId: 'berry_blueberry', // New format with itemId
+      quantity: 5,
+      position: { x: 0, y: 0, z: 0 },
+      droppedBy: 'player1',
+      droppedAt: Date.now(),
+    };
+
+    groundStore.addGroundItem(groundItem);
+    const state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(1);
+    expect(state.groundItems[0].itemId).toBe('berry_blueberry');
+    expect(state.groundItems[0].quantity).toBe(5);
+  });
+
+  it('should handle mixed legacy and new ground item formats', () => {
+    const legacyItem = {
+      id: 'legacy-item-1',
+      itemType: 'berry',
+      itemSubType: 'blueberry',
+      quantity: 3,
+      position: { x: 0, y: 0, z: 0 },
+      droppedBy: 'player1',
+      droppedAt: Date.now(),
+    };
+
+    const newItem = {
+      id: 'new-item-1',
+      itemType: 'consumable',
+      itemId: 'berry_strawberry',
+      quantity: 2,
+      position: { x: 5, y: 0, z: 5 },
+      droppedBy: 'player2',
+      droppedAt: Date.now(),
+    };
+
+    groundStore.addGroundItem(legacyItem);
+    groundStore.addGroundItem(newItem);
+
+    const state = useGroundItemsStore.getState();
+    expect(state.groundItems).toHaveLength(2);
+
+    // Legacy item should still work
+    expect(state.groundItems[0].itemSubType).toBe('blueberry');
+    expect(state.groundItems[0].itemId).toBeUndefined();
+
+    // New item should have itemId
+    expect(state.groundItems[1].itemId).toBe('berry_strawberry');
   });
 
   it('should prevent sync conflicts with pending pickups', () => {

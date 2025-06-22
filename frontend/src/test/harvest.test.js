@@ -101,9 +101,9 @@ describe('Harvest Store', () => {
 
 describe('Inventory Store', () => {
   beforeEach(() => {
-    useInventoryStore.setState({
-      items: [],
-    })
+    // Reset to proper 28-slot array
+    const { clearInventory } = useInventoryStore.getState()
+    clearInventory()
   })
 
   it('should add items to inventory', () => {
@@ -117,7 +117,8 @@ describe('Inventory Store', () => {
     })
 
     const state = useInventoryStore.getState()
-    expect(state.items).toHaveLength(1)
+    expect(state.items).toHaveLength(28) // Fixed array size
+    expect(state.items[0]).not.toBeNull()
     expect(state.items[0].type).toBe('berry')
     expect(state.items[0].subType).toBe('blueberry')
     expect(state.items[0].name).toBe('Blueberry')
@@ -143,8 +144,12 @@ describe('Inventory Store', () => {
     })
 
     const state = useInventoryStore.getState()
-    expect(state.items).toHaveLength(1)
+    expect(state.items).toHaveLength(28) // Fixed array size
+    expect(state.items[0]).not.toBeNull()
     expect(state.items[0].quantity).toBe(2)
+    // Check that only one slot is used
+    const nonNullItems = state.items.filter(item => item !== null)
+    expect(nonNullItems).toHaveLength(1)
   })
 
   it('should not stack different berry types', () => {
@@ -167,9 +172,14 @@ describe('Inventory Store', () => {
     })
 
     const state = useInventoryStore.getState()
-    expect(state.items).toHaveLength(2)
+    expect(state.items).toHaveLength(28) // Fixed array size
+    expect(state.items[0]).not.toBeNull()
+    expect(state.items[1]).not.toBeNull()
     expect(state.items[0].subType).toBe('blueberry')
     expect(state.items[1].subType).toBe('strawberry')
+    // Check that exactly two slots are used
+    const nonNullItems = state.items.filter(item => item !== null)
+    expect(nonNullItems).toHaveLength(2)
   })
 
   it('should remove items from inventory', () => {
@@ -178,11 +188,13 @@ describe('Inventory Store', () => {
     // Add item first
     addItem({
       type: 'berry',
-      name: 'Berry',
+      subType: 'blueberry', // Add subType to avoid issues
+      name: 'Blueberry',
       quantity: 1,
     })
 
     const state = useInventoryStore.getState()
+    expect(state.items[0]).not.toBeNull() // Ensure item was added
     const itemId = state.items[0].id
 
     // Remove item
@@ -204,13 +216,19 @@ describe('Inventory Store', () => {
     addItem({ type: 'berry', subType: 'strawberry', name: 'Strawberry', quantity: 3 })
 
     let state = useInventoryStore.getState()
-    expect(state.items).toHaveLength(2)
+    expect(state.items).toHaveLength(28) // Fixed array size
+    // Check that items were added
+    const nonNullItems = state.items.filter(item => item !== null)
+    expect(nonNullItems).toHaveLength(2)
 
     // Clear inventory
     clearInventory()
 
     state = useInventoryStore.getState()
-    expect(state.items).toHaveLength(0)
+    expect(state.items).toHaveLength(28) // Still fixed array size
+    // Check that all items are null
+    const remainingItems = state.items.filter(item => item !== null)
+    expect(remainingItems).toHaveLength(0)
   })
 
   it('should identify berry items correctly', () => {
@@ -227,6 +245,7 @@ describe('Inventory Store', () => {
     const state = useInventoryStore.getState()
     const berryItem = state.items[0]
 
+    expect(berryItem).not.toBeNull() // Ensure item was added
     expect(berryItem.type).toBe('berry')
     expect(berryItem.subType).toBe('blueberry')
     expect(berryItem.name).toBe('Blueberry')

@@ -2,13 +2,13 @@ Resources:
   BeriGameTable:
     Type: 'AWS::DynamoDB::Table'
     DeletionPolicy: Delete
-    #Data model: 
+    #Data model:
     # {pk: "USER#<user_ID>", sk: "CREATED#<dateTime_created>"} - Created user
     # {pk: "USER#<user_ID>", sk: "POST#<Post_ID>#<dateTime_created>"} - Post object
     # {pk: "USER#<user_ID>", sk: "CONNECTION#<Connection_ID>#<dateTime_created>"} - Websocket connection object
-    # {pk: "USER#<user_ID>", sk: "CHATROOM#<chatroom_ID>"} - chatroom 
+    # {pk: "USER#<user_ID>", sk: "CHATROOM#<chatroom_ID>"} - chatroom
     # -------------------------------------------------------
-    # How positions are tracked in DB 
+    # How positions are tracked in DB
     # through an "AreaID", each Area has an X Y Z space of <TODO: figure limit>
     # {pk: "AREA#<area_ID>", sk: "PLAYER#<player_ID>"} - Environment Position Object
     # -   Environment (tree, bush, items)
@@ -19,14 +19,29 @@ Resources:
     #     -   Description
     #     -   Quantity
     #     -   Stats
-    # {pk: "AREA#<area_ID>", sk: "PLAYER#<player_ID>"} - Player Position Object
+    # {pk: "CHATROOM#<chatroom_ID>", sk: "CONNECTION#<connection_ID>"} - Player Connection Object
     # -   Player
-    #     -   AreaID (partition key)
+    #     -   ChatRoomID (partition key)
+    #     -   ConnectionID (sort key)
     #     -   Stats (health)
-    #     -   Inventory
+    #     -   Inventory (slot-based array)
+    #         -   Array of 28 slots: [{ itemId, quantity, instanceId, metadata }, null, ...]
+    #         -   Each slot can contain an ItemInstance or be null (empty)
+    #         -   Items are identified by itemId (e.g., "berry_blueberry")
+    #         -   Stackable items can have quantity > 1
     #     -   Position
     #     -   Created
     #     -   Name
+    # {pk: "CHATROOM#<chatroom_ID>", sk: "GROUND_ITEM#<item_id>"} - Ground Item Object
+    # -   Ground Item
+    #     -   ChatRoomID (partition key)
+    #     -   ItemID (sort key)
+    #     -   itemId (item definition ID)
+    #     -   quantity
+    #     -   position {x, y, z}
+    #     -   droppedBy (connection ID)
+    #     -   droppedAt (timestamp)
+    #     -   metadata (item-specific data)
     # https://stackoverflow.com/questions/67933217/dynamo-db-erd-for-chat-application
     Properties:
       AttributeDefinitions:

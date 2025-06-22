@@ -113,7 +113,7 @@ export const useUserInputStore = create((set) => ({
 }));
 
 export const useInventoryStore = create((set, get) => ({
-  items: [],
+  items: Array(28).fill(null), // Initialize with 28 empty slots
   lastValidationTime: 0,
   validationInterval: 30000, // 30 seconds
   // Drag and drop state
@@ -121,34 +121,66 @@ export const useInventoryStore = create((set, get) => ({
   draggedFromSlot: null,
   dragOverSlot: null,
 
+  // Set entire inventory from backend sync data
+  setInventory: (inventoryData) =>
+    set(() => {
+      const newItems = Array(28).fill(null);
+
+      if (inventoryData && inventoryData.items) {
+        inventoryData.items.forEach((item, index) => {
+          if (item && index < 28) {
+            newItems[index] = {
+              ...item,
+              // Ensure backward compatibility with old format
+              type: item.type || 'consumable',
+              subType: item.subType || item.itemId,
+              name: item.name,
+              icon: item.icon,
+              quantity: item.quantity || 1,
+              id: item.id || `${item.subType}_${index}_${Date.now()}`
+            };
+          }
+        });
+      }
+
+      return { items: newItems };
+    }),
+
   addItem: (item) =>
     set((state) => {
-      // Check if item already exists and can be stacked
-      const existingItemIndex = state.items.findIndex(
-        (existingItem) =>
-          existingItem && existingItem.type === item.type &&
-          existingItem.subType === item.subType
-      );
+      const newItems = [...state.items];
 
-      if (existingItemIndex !== -1 && item.quantity) {
-        // Stack with existing item
-        const updatedItems = [...state.items];
-        updatedItems[existingItemIndex] = {
-          ...updatedItems[existingItemIndex],
-          quantity: (updatedItems[existingItemIndex].quantity || 1) + (item.quantity || 1)
-        };
-        return { items: updatedItems };
-      } else {
-        // Add as new item to first available slot
-        const newItems = [...state.items];
-        const firstEmptySlot = newItems.findIndex((slotItem) => !slotItem);
-        if (firstEmptySlot !== -1) {
-          newItems[firstEmptySlot] = { ...item, id: Date.now() + Math.random() };
-        } else {
-          newItems.push({ ...item, id: Date.now() + Math.random() });
+      // For stackable items (berries), try to stack first
+      if (item.type === 'berry') {
+        const existingItemIndex = newItems.findIndex(
+          (existingItem) =>
+            existingItem &&
+            existingItem.type === item.type &&
+            existingItem.subType === item.subType
+        );
+
+        if (existingItemIndex !== -1) {
+          // Stack with existing item
+          newItems[existingItemIndex] = {
+            ...newItems[existingItemIndex],
+            quantity: (newItems[existingItemIndex].quantity || 1) + (item.quantity || 1)
+          };
+          return { items: newItems };
         }
-        return { items: newItems };
       }
+
+      // Find first empty slot
+      const firstEmptySlot = newItems.findIndex((slotItem) => !slotItem);
+      if (firstEmptySlot !== -1) {
+        newItems[firstEmptySlot] = {
+          ...item,
+          id: item.id || Date.now() + Math.random()
+        };
+      } else {
+        console.warn('Inventory is full, cannot add item:', item);
+      }
+
+      return { items: newItems };
     }),
 
   removeItem: (itemId) =>
@@ -158,7 +190,7 @@ export const useInventoryStore = create((set, get) => ({
 
   clearInventory: () =>
     set(() => ({
-      items: [],
+      items: Array(28).fill(null),
     })),
 
   // Move item from one slot to another
@@ -201,10 +233,12 @@ export const useInventoryStore = create((set, get) => ({
       dragOverSlot: null,
     })),
 
-  getItemCount: (itemType, subType) => (state) =>
-    state.items
+  getItemCount: (itemType, subType) => {
+    const state = get();
+    return state.items
       .filter((item) => item && item.type === itemType && (!subType || item.subType === subType))
-      .reduce((total, item) => total + (item.quantity || 1), 0),
+      .reduce((total, item) => total + (item.quantity || 1), 0);
+  },
 
   shouldValidate: () => {
     const state = get();
