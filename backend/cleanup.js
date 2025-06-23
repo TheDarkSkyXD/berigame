@@ -1,3 +1,17 @@
+/**
+ * DEPRECATED CLEANUP FUNCTIONS
+ *
+ * These functions are no longer needed because DynamoDB TTL automatically handles cleanup:
+ * - Connection items: ttl = current_time + 120 seconds (2 minutes)
+ * - Ground items: ttl = current_time + 3600 seconds (1 hour)
+ * - Harvest items: ttl = current_time + 600 seconds (10 minutes)
+ *
+ * The expensive table scans in these functions were causing 1+ second delays during
+ * user connections. DynamoDB TTL will automatically delete expired items within 48 hours.
+ *
+ * These functions have been removed from serverless.yml scheduled events.
+ */
+
 const AWS = require("aws-sdk");
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 

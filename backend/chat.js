@@ -1147,45 +1147,17 @@ exports.handler = async function (event, context) {
         const validationStartTime = Date.now();
         console.log(`🔍 [${connectionId}] Starting game state validation`);
 
-        // Execute all queries in parallel for better performance
-        const [playerData, harvestData, groundItemData] = await Promise.all([
-          // Get player's current state from database
-          dynamodb.get({
-            TableName: DB,
-            Key: {
-              PK: bodyAsJSON.chatRoomId,
-              SK: "CONNECTION#" + connectionId,
-            },
-          }).promise(),
-
-          // Get active harvests for this player
-          dynamodb.query({
-            TableName: DB,
-            KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-            ExpressionAttributeValues: {
-              ":pk": bodyAsJSON.chatRoomId,
-              ":sk": `HARVEST#`,
-            },
-          }).promise(),
-
-          // Get all ground items in the chatroom
-          dynamodb.query({
-            TableName: DB,
-            KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
-            ExpressionAttributeValues: {
-              ":pk": bodyAsJSON.chatRoomId,
-              ":sk": "GROUND_ITEM#",
-            },
-          }).promise()
-        ]);
+        // Only get player data - harvests and ground items will be synced separately
+        const playerData = await dynamodb.get({
+          TableName: DB,
+          Key: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: "CONNECTION#" + connectionId,
+          },
+        }).promise();
 
         const queryTime = Date.now() - validationStartTime;
-        console.log(`⚡ [${connectionId}] Parallel queries completed in ${queryTime}ms`);
-
-        // Filter harvests for this player
-        const playerHarvests = harvestData.Items.filter(
-          harvest => harvest.playerId === connectionId
-        );
+        console.log(`⚡ [${connectionId}] Player data query completed in ${queryTime}ms`);
 
         if (playerData.Item) {
           const processingStartTime = Date.now();
@@ -1195,23 +1167,8 @@ exports.handler = async function (event, context) {
 
           const gameState = {
             inventory: inventoryData,
-            activeHarvests: playerHarvests.map(harvest => ({
-              treeId: harvest.treeId,
-              berryType: harvest.berryType,
-              startTime: harvest.startTime,
-              duration: harvest.duration,
-              playerId: harvest.playerId,
-            })),
-            groundItems: groundItemData.Items.map(item => ({
-              id: item.SK,
-              itemType: item.itemType,
-              itemSubType: item.itemSubType,
-              quantity: item.quantity,
-              position: item.position,
-              droppedBy: item.droppedBy,
-              droppedAt: item.droppedAt,
-              droppedOnDeath: item.droppedOnDeath || false,
-            })),
+            activeHarvests: [], // Will be synced separately via real-time updates
+            groundItems: [], // Will be synced separately via real-time updates
             health: playerData.Item.health || 30,
             position: playerData.Item.lastValidPosition || { x: 0, y: 0, z: 0 },
           };
@@ -1220,7 +1177,7 @@ exports.handler = async function (event, context) {
           const totalTime = Date.now() - validationStartTime;
 
           console.log(`📊 [${connectionId}] Game state validation completed in ${totalTime}ms (queries: ${queryTime}ms, processing: ${processingTime}ms)`);
-          console.log(`📦 [${connectionId}] Game state: ${playerHarvests.length} harvests, ${groundItemData.Items.length} ground items`);
+          console.log(`📦 [${connectionId}] Game state: inventory and health only (harvests/ground items synced separately)`);
 
           // Send comprehensive game state back to client
           try {
