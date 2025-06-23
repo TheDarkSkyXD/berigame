@@ -26,6 +26,38 @@ const apig = new AWS.ApiGatewayManagementApi({
 });
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 
+// DynamoDB timing utility
+const logDynamoDBCall = (operation, params) => {
+  const startTime = Date.now();
+  const operationId = `${operation}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+  console.log(`🔵 [${operationId}] Starting DynamoDB ${operation}`, {
+    operation,
+    table: params.TableName,
+    key: params.Key || 'N/A',
+    timestamp: new Date().toISOString()
+  });
+
+  return {
+    operationId,
+    startTime,
+    finish: () => {
+      const duration = Date.now() - startTime;
+      console.log(`🟢 [${operationId}] Completed DynamoDB ${operation} in ${duration}ms`, {
+        operation,
+        duration,
+        timestamp: new Date().toISOString()
+      });
+
+      if (duration > 500) {
+        console.warn(`🐌 [${operationId}] Slow DynamoDB operation: ${operation} took ${duration}ms`);
+      }
+
+      return duration;
+    }
+  };
+};
+
 const DB = process.env.DB;
 const positionValidator = new PositionValidator(DB);
 
@@ -115,7 +147,9 @@ async function getCachedConnections(chatRoomId, forceRefresh = false) {
     },
   };
 
+  const timer = logDynamoDBCall('query', usersParams);
   const result = await dynamodb.query(usersParams).promise();
+  timer.finish();
   const queryTime = Date.now() - queryStartTime;
 
   logger.debug(`📊 DynamoDB query completed in ${queryTime}ms (${result.Items.length} connections found)`);
@@ -270,13 +304,16 @@ async function broadcastToConnections(connections, message, excludeConnectionId 
  */
 async function cleanupStaleConnectionFromDB(chatRoomId, connectionId) {
   try {
-    await dynamodb.delete({
+    const deleteParams = {
       TableName: DB,
       Key: {
         PK: chatRoomId,
         SK: "CONNECTION#" + connectionId,
       },
-    }).promise();
+    };
+    const cleanupTimer = logDynamoDBCall('delete', deleteParams);
+    await dynamodb.delete(deleteParams).promise();
+    cleanupTimer.finish();
 
     logger.debug(`🗑️ Proactively cleaned up stale connection ${connectionId} from ${chatRoomId}`);
   } catch (error) {
@@ -329,7 +366,9 @@ exports.handler = async function (event, context) {
         },
       };
 
+      const deathPlayerTimer = logDynamoDBCall('get', playerParams);
       const playerData = await dynamodb.get(playerParams).promise();
+      deathPlayerTimer.finish();
 
       if (playerData.Item) {
         const player = playerData.Item;
@@ -353,7 +392,7 @@ exports.handler = async function (event, context) {
               z: deathPosition.z + (Math.random() - 0.5) * 2,
             };
 
-            const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
             const groundItemData = createGroundItemData(
               item.itemId,
               item.quantity,
@@ -364,14 +403,17 @@ exports.handler = async function (event, context) {
 
             // Add death flag and save to database
             groundItemData.droppedOnDeath = true;
-            await dynamodb.put({
+            const deathItemParams = {
               TableName: process.env.DB,
               Item: {
                 PK: chatRoomId,
                 SK: groundItemId,
                 ...groundItemData,
               },
-            }).promise();
+            };
+            const deathItemTimer = logDynamoDBCall('put', deathItemParams);
+            await dynamodb.put(deathItemParams).promise();
+            deathItemTimer.finish();
 
             droppedItems.push({
               id: groundItemId,
@@ -401,7 +443,9 @@ exports.handler = async function (event, context) {
       };
 
       // 1. Respawn the player
+      const respawnTimer = logDynamoDBCall('update', respawnParams);
       await dynamodb.update(respawnParams).promise();
+      respawnTimer.finish();
       logger.info(`Player ${connectionId} respawned successfully, dropped ${droppedItems.length} item stacks`);
 
       // 2. Get all connections to broadcast death/respawn event
@@ -466,7 +510,9 @@ exports.handler = async function (event, context) {
     };
 
     try {
+      const timer = logDynamoDBCall('update', rowParams);
       const updateResult = await dynamodb.update(rowParams).promise();
+      timer.finish();
       const newHealth = updateResult.Attributes.health;
 
       console.log(`Player ${connectionId} took ${damage} damage, new health: ${newHealth}`);
@@ -516,19 +562,24 @@ exports.handler = async function (event, context) {
           },
         };
 
+        const disconnectScanTimer = logDynamoDBCall('scan', scanParams);
         const scanResult = await dynamodb.scan(scanParams).promise();
+        disconnectScanTimer.finish();
 
         for (const item of scanResult.Items) {
           const chatRoomId = item.PK;
 
           // Delete the connection record
-          await dynamodb.delete({
+          const disconnectDeleteParams = {
             TableName: DB,
             Key: {
               PK: chatRoomId,
               SK: "CONNECTION#" + connectionId,
             },
-          }).promise();
+          };
+          const disconnectDeleteTimer = logDynamoDBCall('delete', disconnectDeleteParams);
+          await dynamodb.delete(disconnectDeleteParams).promise();
+          disconnectDeleteTimer.finish();
 
           // Clear cache for this chat room to force refresh
           const cacheKey = `connections_${chatRoomId}`;
@@ -551,26 +602,27 @@ exports.handler = async function (event, context) {
     case "connectToChatRoom":
       SK = "CONNECTION#" + connectionId;
       PK = bodyAsJSON.chatRoomId; //TODO: Auth check
-      await dynamodb
-        .put({
-          TableName: DB,
-          Item: {
-            PK,
-            SK,
-            created: timestamp,
-            ttl: Math.floor(new Date().getTime() / 1000) + 120, // 2 mins from now
-            health: MAX_HEALTH,
-            inventory: [], // Initialize empty slot-based inventory
-            // Position validation fields
-            lastValidPosition: SPAWN_LOCATION.position,
-            lastPositionUpdate: timestamp,
-            positionHistory: [{ position: SPAWN_LOCATION.position, timestamp }],
-            violationCount: 0,
-            lastViolationTime: 0,
-            updateCount: 0,
-          },
-        })
-        .promise();
+      const putParams = {
+        TableName: DB,
+        Item: {
+          PK,
+          SK,
+          created: timestamp,
+          ttl: Math.floor(new Date().getTime() / 1000) + 120, // 2 mins from now
+          health: MAX_HEALTH,
+          inventory: [], // Initialize empty slot-based inventory
+          // Position validation fields
+          lastValidPosition: SPAWN_LOCATION.position,
+          lastPositionUpdate: timestamp,
+          positionHistory: [{ position: SPAWN_LOCATION.position, timestamp }],
+          violationCount: 0,
+          lastViolationTime: 0,
+          updateCount: 0,
+        },
+      };
+      const timer = logDynamoDBCall('put', putParams);
+      await dynamodb.put(putParams).promise();
+      timer.finish();
       //Get all connectionIDs associated with chatroom to send back to user
       const getConnections = await getCachedConnections(bodyAsJSON.chatRoomId, true); // Force refresh on connect
       try {
@@ -736,21 +788,22 @@ exports.handler = async function (event, context) {
         const harvestDuration = Math.floor(Math.random() * 8) + 3; // 3-10 seconds
 
         // Store harvest start time in database
-        await dynamodb
-          .put({
-            TableName: DB,
-            Item: {
-              PK: bodyAsJSON.chatRoomId,
-              SK: `HARVEST#${treeId}#${connectionId}`,
-              treeId,
-              berryType,
-              playerId: connectionId,
-              startTime: timestamp,
-              duration: harvestDuration,
-              ttl: Math.floor(new Date().getTime() / 1000) + 600, // 10 mins from now
-            },
-          })
-          .promise();
+        const harvestPutParams = {
+          TableName: DB,
+          Item: {
+            PK: bodyAsJSON.chatRoomId,
+            SK: `HARVEST#${treeId}#${connectionId}`,
+            treeId,
+            berryType,
+            playerId: connectionId,
+            startTime: timestamp,
+            duration: harvestDuration,
+            ttl: Math.floor(new Date().getTime() / 1000) + 600, // 10 mins from now
+          },
+        };
+        const harvestTimer = logDynamoDBCall('put', harvestPutParams);
+        await dynamodb.put(harvestPutParams).promise();
+        harvestTimer.finish();
 
         // Get all connections to broadcast harvest start
         const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
@@ -772,15 +825,16 @@ exports.handler = async function (event, context) {
         setTimeout(async () => {
           try {
             // Check if harvest is still active (not cancelled)
-            const harvestCheck = await dynamodb
-              .get({
-                TableName: DB,
-                Key: {
-                  PK: bodyAsJSON.chatRoomId,
-                  SK: `HARVEST#${treeId}#${connectionId}`,
-                },
-              })
-              .promise();
+            const harvestCheckParams = {
+              TableName: DB,
+              Key: {
+                PK: bodyAsJSON.chatRoomId,
+                SK: `HARVEST#${treeId}#${connectionId}`,
+              },
+            };
+            const harvestCheckTimer = logDynamoDBCall('get', harvestCheckParams);
+            const harvestCheck = await dynamodb.get(harvestCheckParams).promise();
+            harvestCheckTimer.finish();
 
             if (harvestCheck.Item) {
               const harvestBerryType = harvestCheck.Item.berryType || 'blueberry';
@@ -804,7 +858,9 @@ exports.handler = async function (event, context) {
                   SK: "CONNECTION#" + connectionId,
                 },
               };
+              const playerTimer = logDynamoDBCall('get', playerParams);
               const playerData = await dynamodb.get(playerParams).promise();
+              playerTimer.finish();
 
               if (playerData.Item) {
                 // Map legacy berry type to new item ID
@@ -817,14 +873,17 @@ exports.handler = async function (event, context) {
                   if (result.success) {
                     // Update inventory in database
                     const updateExpression = createInventoryUpdateExpression(result.inventory);
-                    await dynamodb.update({
+                    const inventoryUpdateParams = {
                       TableName: DB,
                       Key: {
                         PK: bodyAsJSON.chatRoomId,
                         SK: "CONNECTION#" + connectionId,
                       },
                       ...updateExpression
-                    }).promise();
+                    };
+                    const inventoryTimer = logDynamoDBCall('update', inventoryUpdateParams);
+                    await dynamodb.update(inventoryUpdateParams).promise();
+                    inventoryTimer.finish();
                   } else {
                     console.error(`Failed to add ${itemId} to inventory: ${result.error}`);
                   }
@@ -900,7 +959,9 @@ exports.handler = async function (event, context) {
               SK: "CONNECTION#" + connectionId,
             },
           };
+          const playerTimer2 = logDynamoDBCall('get', playerParams);
           const playerData = await dynamodb.get(playerParams).promise();
+          playerTimer2.finish();
 
           if (playerData.Item) {
             // Map legacy berry type to new item ID
@@ -913,14 +974,17 @@ exports.handler = async function (event, context) {
               if (result.success) {
                 // Update inventory in database
                 const updateExpression = createInventoryUpdateExpression(result.inventory);
-                await dynamodb.update({
+                const inventoryUpdateParams2 = {
                   TableName: DB,
                   Key: {
                     PK: bodyAsJSON.chatRoomId,
                     SK: "CONNECTION#" + connectionId,
                   },
                   ...updateExpression
-                }).promise();
+                };
+                const inventoryTimer2 = logDynamoDBCall('update', inventoryUpdateParams2);
+                await dynamodb.update(inventoryUpdateParams2).promise();
+                inventoryTimer2.finish();
               } else {
                 console.error(`Failed to add ${itemId} to inventory: ${result.error}`);
               }
@@ -994,7 +1058,9 @@ exports.handler = async function (event, context) {
             SK: "CONNECTION#" + connectionId,
           },
         };
+        const consumePlayerTimer = logDynamoDBCall('get', playerParams);
         const playerData = await dynamodb.get(playerParams).promise();
+        consumePlayerTimer.finish();
 
         if (playerData.Item) {
           const currentHealth = playerData.Item.health || 0;
@@ -1021,14 +1087,17 @@ exports.handler = async function (event, context) {
           updateExpression.UpdateExpression = `SET health = :newHealth, ${updateExpression.UpdateExpression.substring(4)}`; // Remove "SET " and prepend health
           updateExpression.ExpressionAttributeValues[':newHealth'] = consumeResult.effect.newHealth;
 
-          await dynamodb.update({
+          const consumeUpdateParams = {
             TableName: DB,
             Key: {
               PK: bodyAsJSON.chatRoomId,
               SK: "CONNECTION#" + connectionId,
             },
             ...updateExpression
-          }).promise();
+          };
+          const consumeTimer = logDynamoDBCall('update', consumeUpdateParams);
+          await dynamodb.update(consumeUpdateParams).promise();
+          consumeTimer.finish();
 
           // Berry consumed successfully
 
@@ -1079,7 +1148,9 @@ exports.handler = async function (event, context) {
             SK: "CONNECTION#" + connectionId,
           },
         };
+        const validateInventoryTimer = logDynamoDBCall('get', playerParams);
         const playerData = await dynamodb.get(playerParams).promise();
+        validateInventoryTimer.finish();
 
         if (playerData.Item) {
           // Get inventory sync data
@@ -1116,7 +1187,9 @@ exports.handler = async function (event, context) {
             SK: "CONNECTION#" + connectionId,
           },
         };
+        const syncInventoryTimer = logDynamoDBCall('get', playerParams);
         const playerData = await dynamodb.get(playerParams).promise();
+        syncInventoryTimer.finish();
 
         if (playerData.Item) {
           // Get inventory sync data
@@ -1148,13 +1221,16 @@ exports.handler = async function (event, context) {
         console.log(`🔍 [${connectionId}] Starting game state validation`);
 
         // Only get player data - harvests and ground items will be synced separately
-        const playerData = await dynamodb.get({
+        const gameStateParams = {
           TableName: DB,
           Key: {
             PK: bodyAsJSON.chatRoomId,
             SK: "CONNECTION#" + connectionId,
           },
-        }).promise();
+        };
+        const gameStateTimer = logDynamoDBCall('get', gameStateParams);
+        const playerData = await dynamodb.get(gameStateParams).promise();
+        gameStateTimer.finish();
 
         const queryTime = Date.now() - validationStartTime;
         console.log(`⚡ [${connectionId}] Player data query completed in ${queryTime}ms`);
@@ -1236,7 +1312,9 @@ exports.handler = async function (event, context) {
             SK: "CONNECTION#" + connectionId,
           },
         };
+        const dropPlayerTimer = logDynamoDBCall('get', playerParams);
         const playerData = await dynamodb.get(playerParams).promise();
+        dropPlayerTimer.finish();
 
         if (!playerData.Item) {
           console.error("Player not found for dropItem");
@@ -1257,17 +1335,20 @@ exports.handler = async function (event, context) {
 
         // Update inventory in database
         const updateExpression = createInventoryUpdateExpression(removeResult.inventory);
-        await dynamodb.update({
+        const dropUpdateParams = {
           TableName: DB,
           Key: {
             PK: bodyAsJSON.chatRoomId,
             SK: "CONNECTION#" + connectionId,
           },
           ...updateExpression
-        }).promise();
+        };
+        const dropTimer = logDynamoDBCall('update', dropUpdateParams);
+        await dynamodb.update(dropUpdateParams).promise();
+        dropTimer.finish();
 
         // Create ground item at server's verified position
-        const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const groundItemId = `GROUND_ITEM#${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
         const groundItemData = createGroundItemData(
           itemId,
           quantity,
@@ -1275,14 +1356,17 @@ exports.handler = async function (event, context) {
           connectionId
         );
 
-        await dynamodb.put({
+        const groundItemPutParams = {
           TableName: DB,
           Item: {
             PK: bodyAsJSON.chatRoomId,
             SK: groundItemId,
             ...groundItemData,
           },
-        }).promise();
+        };
+        const groundItemTimer = logDynamoDBCall('put', groundItemPutParams);
+        await dynamodb.put(groundItemPutParams).promise();
+        groundItemTimer.finish();
 
         // Broadcast ground item creation to all players in parallel
         const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
@@ -1324,7 +1408,9 @@ exports.handler = async function (event, context) {
           },
         };
 
+        const pickupGroundTimer = logDynamoDBCall('get', groundItemParams);
         const groundItemData = await dynamodb.get(groundItemParams).promise();
+        pickupGroundTimer.finish();
 
         if (!groundItemData.Item) {
           console.error("Ground item not found for pickup");
@@ -1341,7 +1427,9 @@ exports.handler = async function (event, context) {
             SK: "CONNECTION#" + connectionId,
           },
         };
+        const pickupPlayerTimer = logDynamoDBCall('get', playerParams);
         const playerData = await dynamodb.get(playerParams).promise();
+        pickupPlayerTimer.finish();
 
         if (!playerData.Item) {
           console.error("Player not found for pickupItem");
@@ -1366,23 +1454,29 @@ exports.handler = async function (event, context) {
 
         // Update inventory in database
         const updateExpression = createInventoryUpdateExpression(addResult.inventory);
-        await dynamodb.update({
+        const pickupUpdateParams = {
           TableName: DB,
           Key: {
             PK: bodyAsJSON.chatRoomId,
             SK: "CONNECTION#" + connectionId,
           },
           ...updateExpression
-        }).promise();
+        };
+        const pickupUpdateTimer = logDynamoDBCall('update', pickupUpdateParams);
+        await dynamodb.update(pickupUpdateParams).promise();
+        pickupUpdateTimer.finish();
 
         // Remove ground item
-        await dynamodb.delete({
+        const pickupDeleteParams = {
           TableName: DB,
           Key: {
             PK: bodyAsJSON.chatRoomId,
             SK: groundItemId,
           },
-        }).promise();
+        };
+        const pickupDeleteTimer = logDynamoDBCall('delete', pickupDeleteParams);
+        await dynamodb.delete(pickupDeleteParams).promise();
+        pickupDeleteTimer.finish();
 
         // Broadcast ground item removal to all players in parallel
         const connections = await getCachedConnections(bodyAsJSON.chatRoomId);
@@ -1430,7 +1524,9 @@ module.exports.openChatRoom = async (event, context, callback) => {
       KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
       ExpressionAttributeValues: { ":pk": data.chatRoomId, ":sk": "MESSAGE#" },
     };
+    const messagesTimer = logDynamoDBCall('query', params);
     const getMessages = await dynamodb.query(params).promise();
+    messagesTimer.finish();
     callback(
       null,
       helpers.validCallbackObject({ messages: getMessages.Items })
@@ -1456,16 +1552,18 @@ module.exports.getChatRooms = async (event, context, callback) => {
       KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
       ExpressionAttributeValues: { ":pk": decoded.PK, ":sk": "CHATROOM#" },
     };
+    const chatRoomsTimer = logDynamoDBCall('query', getChatRoomsParams);
     let chatRooms = await dynamodb.query(getChatRoomsParams).promise();
+    chatRoomsTimer.finish();
     for (let chatRoom of chatRooms.Items) {
       const getChatRoomUsersParams = {
         TableName: process.env.DB,
         KeyConditionExpression: "PK = :pk and begins_with(SK, :sk)",
         ExpressionAttributeValues: { ":pk": chatRoom.SK, ":sk": "USER#" },
       };
-      const chatRoomUsers = await dynamodb
-        .query(getChatRoomUsersParams)
-        .promise();
+      const chatRoomUsersTimer = logDynamoDBCall('query', getChatRoomUsersParams);
+      const chatRoomUsers = await dynamodb.query(getChatRoomUsersParams).promise();
+      chatRoomUsersTimer.finish();
       // Avoid sending back user guid
       chatRoomUsers.Items.forEach((x) => delete x.SK);
       chatRoom.users = chatRoomUsers.Items;
@@ -1502,7 +1600,9 @@ module.exports.createChatRoom = async (event, context, callback) => {
       KeyConditionExpression: "PK = :pk",
       ExpressionAttributeValues: { ":pk": decoded.PK },
     };
+    const getHandleTimer = logDynamoDBCall('query', getHandleParams);
     const getHandle = await dynamodb.query(getHandleParams).promise();
+    getHandleTimer.finish();
     const handle = getHandle.Items[0].handle;
     const roomParams = {
       TableName: process.env.DB,
@@ -1514,7 +1614,9 @@ module.exports.createChatRoom = async (event, context, callback) => {
         modified: timestamp,
       },
     };
+    const roomTimer = logDynamoDBCall('put', roomParams);
     await dynamodb.put(roomParams).promise();
+    roomTimer.finish();
 
     const userParams = {
       TableName: process.env.DB,
@@ -1525,7 +1627,9 @@ module.exports.createChatRoom = async (event, context, callback) => {
         created: timestamp,
       },
     };
+    const userTimer = logDynamoDBCall('put', userParams);
     await dynamodb.put(userParams).promise();
+    userTimer.finish();
 
     callback(null, helpers.validCallbackObject({ chatRoomId }));
   } catch (e) {

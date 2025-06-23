@@ -15,6 +15,38 @@
 const AWS = require("aws-sdk");
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 
+// DynamoDB timing utility
+const logDynamoDBCall = (operation, params) => {
+  const startTime = Date.now();
+  const operationId = `${operation}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+  console.log(`🔵 [${operationId}] Starting DynamoDB ${operation}`, {
+    operation,
+    table: params.TableName,
+    key: params.Key || 'N/A',
+    timestamp: new Date().toISOString()
+  });
+
+  return {
+    operationId,
+    startTime,
+    finish: () => {
+      const duration = Date.now() - startTime;
+      console.log(`🟢 [${operationId}] Completed DynamoDB ${operation} in ${duration}ms`, {
+        operation,
+        duration,
+        timestamp: new Date().toISOString()
+      });
+
+      if (duration > 500) {
+        console.warn(`🐌 [${operationId}] Slow DynamoDB operation: ${operation} took ${duration}ms`);
+      }
+
+      return duration;
+    }
+  };
+};
+
 // Handle offline environment for API Gateway Management API
 let apig = null;
 try {
@@ -82,7 +114,9 @@ exports.cleanupStaleConnections = async (event, context) => {
         scanParams.ExclusiveStartKey = lastEvaluatedKey;
       }
       
+      const scanTimer = logDynamoDBCall('scan', scanParams);
       const scanResult = await dynamodb.scan(scanParams).promise();
+      scanTimer.finish();
       totalConnections += scanResult.Items.length;
       
       // Process each connection
@@ -216,7 +250,9 @@ exports.cleanupExpiredGroundItems = async (event, context) => {
         scanParams.ExclusiveStartKey = lastEvaluatedKey;
       }
       
+      const groundItemsScanTimer = logDynamoDBCall('scan', scanParams);
       const scanResult = await dynamodb.scan(scanParams).promise();
+      groundItemsScanTimer.finish();
       totalItems += scanResult.Items.length;
       
       // Process each ground item
@@ -227,13 +263,16 @@ exports.cleanupExpiredGroundItems = async (event, context) => {
         if (item.ttl && item.ttl < currentTime) {
           logger.debug(`⏰ Ground item ${item.SK} has expired TTL`);
           
-          await dynamodb.delete({
+          const deleteParams = {
             TableName: DB,
             Key: {
               PK: item.PK,
               SK: item.SK,
             },
-          }).promise();
+          };
+          const deleteTimer = logDynamoDBCall('delete', deleteParams);
+          await dynamodb.delete(deleteParams).promise();
+          deleteTimer.finish();
           
           expiredItems++;
         }

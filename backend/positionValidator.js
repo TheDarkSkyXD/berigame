@@ -1,6 +1,38 @@
 const AWS = require("aws-sdk");
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 
+// DynamoDB timing utility
+const logDynamoDBCall = (operation, params) => {
+  const startTime = Date.now();
+  const operationId = `${operation}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+  console.log(`🔵 [${operationId}] Starting DynamoDB ${operation}`, {
+    operation,
+    table: params.TableName,
+    key: params.Key || 'N/A',
+    timestamp: new Date().toISOString()
+  });
+
+  return {
+    operationId,
+    startTime,
+    finish: () => {
+      const duration = Date.now() - startTime;
+      console.log(`🟢 [${operationId}] Completed DynamoDB ${operation} in ${duration}ms`, {
+        operation,
+        duration,
+        timestamp: new Date().toISOString()
+      });
+
+      if (duration > 500) {
+        console.warn(`🐌 [${operationId}] Slow DynamoDB operation: ${operation} took ${duration}ms`);
+      }
+
+      return duration;
+    }
+  };
+};
+
 // Game world constants
 const WORLD_BOUNDS = {
   MIN_X: -25,
@@ -278,7 +310,9 @@ class PositionValidator {
         }
       };
 
+      const playerStateTimer = logDynamoDBCall('get', params);
       const result = await dynamodb.get(params).promise();
+      playerStateTimer.finish();
       return result.Item;
     } catch (error) {
       console.error("Error getting player state:", error);
@@ -311,7 +345,9 @@ class PositionValidator {
       }
     };
 
+    const initTimer = logDynamoDBCall('update', params);
     await dynamodb.update(params).promise();
+    initTimer.finish();
   }
 
   /**
@@ -349,13 +385,16 @@ class PositionValidator {
       }
     };
 
+    const positionTimer = logDynamoDBCall('update', params);
     await dynamodb.update(params).promise();
+    positionTimer.finish();
   }
 
   /**
    * Record a violation with comprehensive logging
    */
   async recordViolation(connectionId, chatRoomId, violationType, timestamp, additionalData = {}) {
+    // Note: getPlayerState already has timing logs
     const playerState = await this.getPlayerState(connectionId, chatRoomId);
     const violationCount = (playerState.violationCount || 0) + 1;
 
@@ -383,7 +422,9 @@ class PositionValidator {
       }
     };
 
+    const violationTimer = logDynamoDBCall('update', params);
     await dynamodb.update(params).promise();
+    violationTimer.finish();
 
     // Comprehensive logging
     const logData = {

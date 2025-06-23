@@ -12,7 +12,6 @@ import {
 import { connectToChatRoom } from "../Api";
 
 const Api = (props) => {
-  let url = "https://dm465kqzfi.execute-api.ap-southeast-2.amazonaws.com/dev/";
   let wsUrl = "wss://w6et9cl8r6.execute-api.ap-southeast-2.amazonaws.com/dev/";
   const setWebSocket = useWebsocketStore((state: any) => state.setWebSocket);
   const websocketConnection = useWebsocketStore(
@@ -67,7 +66,6 @@ const Api = (props) => {
   const setGameDataLoaded = useLoadingStore((state: any) => state.setGameDataLoaded);
 
   if (process.env.NODE_ENV === "development") {
-    url = "http://localhost:3000/dev/";
     wsUrl = "ws://localhost:3001";
   }
   let clientConnectionId = null;
@@ -391,33 +389,34 @@ const Api = (props) => {
 
   const _webSocketOpen = (e: Event) => {
     console.log("WebSocket connected successfully:", e);
+    const ws = e.target as WebSocket; // Get the actual WebSocket instance
 
     // Notify loading store that websocket is connected
     setWebsocketConnected(true);
 
     // Connect to chat room once connection is established
     setTimeout(() => {
-      connectToChatRoom("", websocketConnection);
+      connectToChatRoom("", ws);
 
       // Immediately request game state validation for faster loading
       setTimeout(() => {
-        if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
           console.log("🚀 Requesting immediate game state validation for faster loading");
           const gameStatePayload = {
             chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
             action: "validateGameState",
           };
-          websocketConnection.send(JSON.stringify(gameStatePayload));
+          ws.send(JSON.stringify(gameStatePayload));
 
           // Also request inventory sync
           const inventoryPayload = {
             chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
             action: "requestInventorySync",
           };
-          websocketConnection.send(JSON.stringify(inventoryPayload));
+          ws.send(JSON.stringify(inventoryPayload));
         }
-      }, 500); // Reduced from 2000ms to 500ms for faster loading
-    }, 1000);
+      }, 100);
+    }, 500); // Reduced to 500ms for faster connection
   };
 
   const initializeWebSocket = () => {

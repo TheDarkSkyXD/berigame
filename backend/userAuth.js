@@ -2,6 +2,38 @@
 const uuid = require("uuid");
 const AWS = require("aws-sdk"); // eslint-disable-line import/no-extraneous-dependencies
 const dynamoDb = new AWS.DynamoDB.DocumentClient();
+
+// DynamoDB timing utility
+const logDynamoDBCall = (operation, params) => {
+  const startTime = Date.now();
+  const operationId = `${operation}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+  console.log(`🔵 [${operationId}] Starting DynamoDB ${operation}`, {
+    operation,
+    table: params.TableName,
+    key: params.Key || 'N/A',
+    timestamp: new Date().toISOString()
+  });
+
+  return {
+    operationId,
+    startTime,
+    finish: () => {
+      const duration = Date.now() - startTime;
+      console.log(`🟢 [${operationId}] Completed DynamoDB ${operation} in ${duration}ms`, {
+        operation,
+        duration,
+        timestamp: new Date().toISOString()
+      });
+
+      if (duration > 500) {
+        console.warn(`🐌 [${operationId}] Slow DynamoDB operation: ${operation} took ${duration}ms`);
+      }
+
+      return duration;
+    }
+  };
+};
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const helpers = require("./helpers");
@@ -56,7 +88,9 @@ module.exports.signup = async (event, context, callback) => {
     };
 
     // write the user to the database
+    const signupTimer = logDynamoDBCall('put', params);
     await dynamoDb.put(params).promise();
+    signupTimer.finish();
     callback(
       null,
       helpers.validCallbackObject({
@@ -115,7 +149,9 @@ module.exports.auth = (event, context, callback) => {
     KeyConditionExpression: "PK = :pk",
     ExpressionAttributeValues: { ":pk": decoded.PK },
   };
+  const authTimer = logDynamoDBCall('query', checkParams);
   dynamoDb.query(checkParams, function (err, ddbData) {
+    authTimer.finish();
     if (err) {
       console.error("Unable to query. Error:", JSON.stringify(err, null, 2));
     } else {
