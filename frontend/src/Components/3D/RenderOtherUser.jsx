@@ -64,7 +64,7 @@ const RenderOtherUser = ({
 
   useEffect(() => {
     const userDamage = damageToRender[connectionId];
-    if (userDamage) {
+    if (userDamage !== null && userDamage !== undefined) {
       // Set the damage number for display
       setCurrentDamage({ val: userDamage, timestamp: Date.now() });
       removeDamageToRender(connectionId);

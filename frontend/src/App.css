@@ -253,6 +253,10 @@ canvas {
   font-size: 24px;
 }
 
+.damage-number.zero-damage {
+  color: blue;
+}
+
 .damage-number.animation1 {
   animation: damageNumber1 1.5s;
   animation-fill-mode: forwards;

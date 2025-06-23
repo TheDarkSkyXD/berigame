@@ -9,13 +9,18 @@ const DamageNumber = (props) => {
     props.playerPosition.z
   );
   const randBool = Math.random() < 0.5;
+  const isZeroDamage = props.damageToRender === 0;
+  const className = "damage-number" +
+    (isZeroDamage ? " zero-damage" : "") +
+    (randBool ? " animation1" : " animation2");
+
   return (
     <Html
       zIndexRange={[6, 4]}
       prepend
       center
       position={position}
-      className={"damage-number" + (randBool ? " animation1" : " animation2")}
+      className={className}
     >
       {props.damageToRender}
     </Html>

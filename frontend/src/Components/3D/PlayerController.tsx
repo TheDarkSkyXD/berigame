@@ -70,7 +70,7 @@ const PlayerController = (props) => {
   useEffect(() => {
     // Set damage to render variables for own player
     const userDamage = damageToRender[userConnectionId];
-    if (userDamage) {
+    if (userDamage !== null && userDamage !== undefined) {
       // Only set the damage number, let backend health update handle the actual health value
       setCurrentDamage({ val: userDamage, timestamp: Date.now() });
       removeDamageToRender(userConnectionId);

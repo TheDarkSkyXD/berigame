@@ -745,12 +745,16 @@ exports.handler = async function (event, context) {
         const attackingPlayer = bodyAsJSON.message.attackingPlayer;
         let damage = 0;
         if (attackingPlayer) {
-          damage = Math.floor(Math.random() * 3) + 1;
+          // Allow 0 damage - random damage from 0 to 3
+          damage = Math.floor(Math.random() * 4);
           bodyAsJSON.message.damageGiven = {
             receivingPlayer: attackingPlayer,
             damage,
           };
-          await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+          // Only deal damage if damage > 0
+          if (damage > 0) {
+            await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+          }
         }
 
         // Broadcast validated position to other players in parallel
