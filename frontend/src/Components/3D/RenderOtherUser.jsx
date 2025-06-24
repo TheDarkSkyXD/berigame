@@ -49,26 +49,93 @@ const RenderOtherUser = ({
   // Use unified combat state for this player
   const combatState = useCombatState(connectionId);
 
+  // Animation state management for other players
+  const [currentAnimationState, setCurrentAnimationState] = useState('idle');
+  const [attackAnimationTimeout, setAttackAnimationTimeout] = useState(null);
+
+  // Centralized animation control function for other players
+  const playAnimation = (newState) => {
+    if (currentAnimationState === newState) {
+      return; // Don't restart same animation
+    }
+
+    console.log(`🎭 Other player ${connectionId} animation transition: ${currentAnimationState} -> ${newState}`);
+
+    // Clear any existing attack timeout
+    if (attackAnimationTimeout) {
+      clearTimeout(attackAnimationTimeout);
+      setAttackAnimationTimeout(null);
+    }
+
+    // Stop all animations first
+    actions["Idle"]?.stop();
+    actions["Walk"]?.stop();
+    actions["RightHook"]?.stop();
+
+    // Update animation state
+    setCurrentAnimationState(newState);
+
+    // Play the requested animation
+    switch (newState) {
+      case 'idle':
+        actions["Idle"]?.play();
+        console.log(`🎭 Other player ${connectionId} playing Idle animation`);
+        break;
+      case 'walk':
+        actions["Walk"]?.play();
+        console.log(`🎭 Other player ${connectionId} playing Walk animation`);
+        break;
+      case 'attack':
+        actions["RightHook"]?.play();
+        console.log(`🎭 Other player ${connectionId} playing Attack animation`);
+        // Set timeout to return to idle after attack animation (1 second like PlayerController)
+        const timeout = setTimeout(() => {
+          console.log(`🎭 Other player ${connectionId} attack animation complete, returning to idle`);
+          // Only transition to idle if we're still in attack state (not interrupted)
+          if (currentAnimationState === 'attack') {
+            setCurrentAnimationState('idle');
+            actions["RightHook"]?.stop();
+            actions["Idle"]?.play();
+          }
+          setAttackAnimationTimeout(null);
+        }, 1000);
+        setAttackAnimationTimeout(timeout);
+        break;
+      case 'death':
+        console.log(`🎭 Other player ${connectionId} playing Death animation (stopping all)`);
+        // All animations already stopped above
+        break;
+    }
+  };
+
   // Handle death/respawn animations based on combat state
   useEffect(() => {
     if (combatState.isDead) {
       console.log(`Other player ${connectionId} appears to have died`);
-      // Stop animations for dead player
-      actions["Walk"]?.stop();
-      actions["RightHook"]?.stop();
-      actions["Idle"]?.stop();
+      playAnimation('death');
     } else if (!combatState.isDead && combatState.health > 0) {
-      // If player is alive, ensure idle animation is playing
-      actions["Idle"]?.play();
+      // If player is alive and was dead, return to idle
+      if (currentAnimationState === 'death') {
+        playAnimation('idle');
+      }
     }
-  }, [combatState.isDead, combatState.health, connectionId, actions]);
+  }, [combatState.isDead, combatState.health, connectionId]);
 
+  // Handle attack animation changes
   useEffect(() => {
     if (isAttacking) {
-      actions["Idle"]?.stop();
-      actions["RightHook"]?.play();
+      playAnimation('attack');
+    } else {
+      // When not attacking anymore, return to appropriate state
+      if (currentAnimationState === 'attack') {
+        if (isWalking) {
+          playAnimation('walk');
+        } else {
+          playAnimation('idle');
+        }
+      }
     }
-  }, [isAttacking]);
+  }, [isAttacking, isWalking]);
 
   useEffect(() => {
     if (!isWalking)
@@ -88,8 +155,12 @@ const RenderOtherUser = ({
         copiedScene.lookAt(restPositionV3);
       }
       if (isSameCoordinates(objRef.current.position, restPositionV3)) return;
-      actions["Idle"]?.stop();
-      actions["Walk"]?.play();
+
+      // Use centralized animation system for walking
+      if (!isAttacking) { // Don't interrupt attack animations
+        playAnimation('walk');
+      }
+
       setCurrentTween(
         new TWEEN.Tween(objRef.current.position)
           .to(
@@ -97,11 +168,18 @@ const RenderOtherUser = ({
             objRef.current.position.distanceTo(restPositionV3) * 500
           )
           .onComplete(() => {
-            actions["Walk"]?.stop();
-            actions["Idle"]?.play();
+            // Use centralized animation system when walk completes
+            if (!isAttacking) { // Don't interrupt attack animations
+              playAnimation('idle');
+            }
           })
           .start()
       );
+    } else {
+      // When not walking, return to idle if not attacking
+      if (currentAnimationState === 'walk' && !isAttacking) {
+        playAnimation('idle');
+      }
     }
   }, [isWalking, restPosition]);
 
@@ -110,7 +188,8 @@ const RenderOtherUser = ({
   });
 
   useEffect(() => {
-    actions["Idle"]?.play();
+    // Initialize with idle animation using centralized system
+    playAnimation('idle');
   }, [animations, mixer]);
 
   const materialChange = () => {
