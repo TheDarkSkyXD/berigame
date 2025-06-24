@@ -93,7 +93,7 @@ describe('Combat System', () => {
     });
   });
 
-  test('should allow 0 damage attacks', async () => {
+  test('should allow 0 damage attacks with consistent health updates', async () => {
     // Mock Math.random to return 0 (which should result in 0 damage)
     const originalRandom = Math.random;
     Math.random = jest.fn(() => 0); // This will result in Math.floor(0 * 4) = 0
@@ -119,11 +119,21 @@ describe('Combat System', () => {
 
     // Verify that the attack was processed
     expect(result.statusCode).toBe(200);
-    
-    // Verify that dealDamage was NOT called for 0 damage
+
+    // Verify that dealDamage was NOT called for 0 damage (no health update)
     expect(mockDynamoDB.update).not.toHaveBeenCalledWith(
       expect.objectContaining({
         UpdateExpression: "SET health = health - :val",
+      })
+    );
+
+    // But verify that health was queried for consistent message flow
+    expect(mockDynamoDB.get).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Key: {
+          PK: 'test-room',
+          SK: 'CONNECTION#target-player',
+        },
       })
     );
 

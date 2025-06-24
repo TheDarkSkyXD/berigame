@@ -248,13 +248,27 @@ canvas {
 }
 
 .damage-number {
-  color: red;
   font-weight: 700;
   font-size: 24px;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
 }
 
+/* Normal damage - red */
+.damage-number.normal-damage {
+  color: #ff4444;
+}
+
+/* Zero damage hits - blue */
 .damage-number.zero-damage {
-  color: blue;
+  color: #4488ff;
+}
+
+/* Blocked attacks - gray with strikethrough effect */
+.damage-number.blocked-attack {
+  color: #888888;
+  font-size: 18px;
+  text-decoration: line-through;
+  opacity: 0.8;
 }
 
 .damage-number.animation1 {

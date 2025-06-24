@@ -758,22 +758,46 @@ exports.handler = async function (event, context) {
             bodyAsJSON.message.damageGiven = {
               receivingPlayer: attackingPlayer,
               damage,
+              attackType: 'hit', // Distinguish from blocked attacks
             };
             // Set attack cooldown for this player
             setPlayerAttackCooldown(connectionId);
-            // Deal damage and get new health if damage > 0
+
+            // Always get current health and include in message for consistent flow
+            // This ensures 0 damage attacks still trigger health update messages
+            let newHealth;
             if (damage > 0) {
-              const newHealth = await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
-              // Include the new health in the attack message to consolidate updates
-              bodyAsJSON.message.damageGiven.newHealth = newHealth;
+              // Deal actual damage and get new health
+              newHealth = await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+            } else {
+              // For 0 damage, get current health without changing it
+              const targetPlayerParams = {
+                TableName: DB,
+                Key: {
+                  PK: bodyAsJSON.chatRoomId,
+                  SK: "CONNECTION#" + attackingPlayer,
+                },
+              };
+              const targetPlayerTimer = logDynamoDBCall('get', targetPlayerParams);
+              const targetPlayerData = await dynamodb.get(targetPlayerParams).promise();
+              targetPlayerTimer.finish();
+              newHealth = targetPlayerData.Item ? (targetPlayerData.Item.health || 30) : 30;
             }
-            console.log(`⚔️ [${currentTime}] ${connectionId} → ${attackingPlayer}: ${damage} damage (gap: ${timeSinceLastAttack}ms)`);
+
+            // Always include the health in the attack message for consistent message flow
+            bodyAsJSON.message.damageGiven.newHealth = newHealth;
+            console.log(`⚔️ [${currentTime}] ${connectionId} → ${attackingPlayer}: ${damage} damage (gap: ${timeSinceLastAttack}ms, health: ${newHealth})`);
           } else {
             // Attack is on cooldown, don't process damage but still broadcast position
             const remainingCooldown = ATTACK_COOLDOWN_MS - timeSinceLastAttack;
             console.log(`🛡️ [${currentTime}] ${connectionId} attack blocked (cooldown: ${remainingCooldown}ms remaining, gap: ${timeSinceLastAttack}ms)`);
-            // Clear any damage info since attack is on cooldown
-            bodyAsJSON.message.damageGiven = null;
+            // Set blocked attack info to differentiate from 0 damage hits
+            bodyAsJSON.message.damageGiven = {
+              receivingPlayer: attackingPlayer,
+              damage: 0,
+              attackType: 'blocked', // Distinguish blocked attacks from 0 damage hits
+              remainingCooldown: remainingCooldown
+            };
           }
         }
 

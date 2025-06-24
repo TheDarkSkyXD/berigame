@@ -129,21 +129,35 @@ const Api = (props) => {
       if (messageObject.position && messageObject.userId) {
         updateUserPosition(messageObject);
         if (messageObject.attackingPlayer && messageObject.damageGiven) {
-          // Process damage to show on the target player
-          // Everyone should see damage numbers on the target (including the target themselves)
-          addDamageToRender(messageObject.damageGiven);
+          const damageInfo = messageObject.damageGiven;
+          const targetPlayerId = damageInfo.receivingPlayer;
 
-          // Handle consolidated health update if included in attack message
-          if (messageObject.damageGiven.newHealth !== undefined) {
-            const targetPlayerId = messageObject.damageGiven.receivingPlayer;
+          // Process damage display based on attack type
+          if (damageInfo.attackType === 'hit') {
+            // Show damage numbers for successful hits (including 0 damage)
+            console.log(`💥 Processing hit: ${damageInfo.damage} damage to ${targetPlayerId} (type: ${damageInfo.attackType})`);
+            addDamageToRender(damageInfo);
+          } else if (damageInfo.attackType === 'blocked') {
+            // Show blocked attack feedback differently
+            console.log(`🛡️ Processing blocked attack to ${targetPlayerId} (cooldown: ${damageInfo.remainingCooldown}ms)`);
+            // Add blocked attack to render with special indicator
+            addDamageToRender({
+              ...damageInfo,
+              damage: 'BLOCKED' // Special indicator for blocked attacks
+            });
+          }
+
+          // Always handle health updates for consistent message flow
+          // This ensures 0 damage attacks still trigger health update messages
+          if (damageInfo.newHealth !== undefined) {
             if (targetPlayerId === userConnectionId) {
               // Update own health from consolidated attack message
-              console.log(`❤️ Attack damage - Own player health: ${useUserStateStore.getState().health} -> ${messageObject.damageGiven.newHealth}`);
-              setHealth(messageObject.damageGiven.newHealth);
+              console.log(`❤️ Attack ${damageInfo.attackType} - Own player health: ${useUserStateStore.getState().health} -> ${damageInfo.newHealth}`);
+              setHealth(damageInfo.newHealth);
             } else {
               // Update other player's health from consolidated attack message
-              console.log(`❤️ Attack damage - Other player ${targetPlayerId} health: ${messageObject.damageGiven.newHealth}`);
-              setPlayerHealth(targetPlayerId, messageObject.damageGiven.newHealth);
+              console.log(`❤️ Attack ${damageInfo.attackType} - Other player ${targetPlayerId} health: ${damageInfo.newHealth}`);
+              setPlayerHealth(targetPlayerId, damageInfo.newHealth);
             }
           }
         }
