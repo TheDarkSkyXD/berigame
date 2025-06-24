@@ -174,15 +174,12 @@ const RenderOtherUser = ({
             isOwnPlayer={false}
           />
           {combatState.damage !== null && (
-            <>
-              {console.log(`💥 Rendering damage component for other player ${connectionId}: ${combatState.damage} at ${combatState.damageTimestamp}`)}
-              <DamageNumber
-                key={combatState.damageTimestamp}
-                playerPosition={copiedScene.position}
-                yOffset={1.5}
-                damageToRender={combatState.damage}
-              />
-            </>
+            <DamageNumber
+              key={`damage-${connectionId}-${combatState.damageTimestamp}`}
+              playerPosition={copiedScene.position}
+              yOffset={1.5}
+              damageToRender={combatState.damage}
+            />
           )}
           {combatState.isDead && (
             <ChatBubble

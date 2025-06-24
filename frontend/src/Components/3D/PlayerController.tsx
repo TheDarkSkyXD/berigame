@@ -135,17 +135,7 @@ const PlayerController = (props) => {
     }
   };
 
-  // Cleanup expired damage numbers with proper timing
-  useEffect(() => {
-    if (!currentDamage) return;
-
-    const timeoutId = setTimeout(() => {
-      console.log(`💥 Damage counter expired for own player: ${currentDamage?.val}`);
-      setCurrentDamage(null);
-    }, 1400);
-
-    return () => clearTimeout(timeoutId);
-  }, [currentDamage]);
+  // Note: Damage cleanup is now handled automatically by the unified combat state system
 
   // Handle death state changes
   useEffect(() => {
@@ -158,9 +148,9 @@ const PlayerController = (props) => {
     }
   }, [combatState.isDead, isPlayingDeathAnimation]);
 
-  // Handle death state changes
+  // Handle death state changes (duplicate - using combatState.isDead above)
   useEffect(() => {
-    if (isDead && !isPlayingDeathAnimation) {
+    if (combatState.isDead && !isPlayingDeathAnimation) {
       setIsPlayingDeathAnimation(true);
       console.log("Playing death animation placeholder");
 
@@ -171,14 +161,13 @@ const PlayerController = (props) => {
       // Placeholder death animation - could be a fade out or collapse
       console.log("DEATH ANIMATION PLACEHOLDER: Player has died!");
     }
-  }, [isDead]);
+  }, [combatState.isDead]);
 
   // Handle respawn
   useEffect(() => {
-    if (isRespawning) {
+    if (combatState.isRespawning) {
       console.log("Respawning player to spawn location");
       setIsPlayingDeathAnimation(false);
-      setLocalHealth(health);
 
       // Move player to spawn location
       if (objRef.current) {
@@ -204,7 +193,7 @@ const PlayerController = (props) => {
         );
       }
     }
-  }, [isRespawning]);
+  }, [combatState.isRespawning]);
 
   // Handle position corrections from server
   useEffect(() => {
@@ -469,15 +458,12 @@ const PlayerController = (props) => {
           isOwnPlayer={true}
         />
         {combatState.damage !== null && (
-          <>
-            {console.log(`💥 Rendering damage component for own player: ${combatState.damage} at ${combatState.damageTimestamp}`)}
-            <DamageNumber
-              key={combatState.damageTimestamp}
-              playerPosition={obj.position}
-              yOffset={1.5}
-              damageToRender={combatState.damage}
-            />
-          </>
+          <DamageNumber
+            key={`damage-${userConnectionId}-${combatState.damageTimestamp}`}
+            playerPosition={obj.position}
+            yOffset={1.5}
+            damageToRender={combatState.damage}
+          />
         )}
         {combatState.isDead && (
           <ChatBubble
@@ -498,7 +484,7 @@ const PlayerController = (props) => {
         <primitive
           object={obj}
           // Add visual feedback for death state
-          scale={isDead ? [1, 1, 1] : [1, 1, 1]}
+          scale={combatState.isDead ? [1, 1, 1] : [1, 1, 1]}
           // TODO: Add death animation effects here when available
         />
       </Suspense>

@@ -2,7 +2,13 @@ import { Html } from "@react-three/drei";
 import React from "react";
 import { Vector3 } from "three";
 
-const DamageNumber = (props) => {
+interface DamageNumberProps {
+  playerPosition: { x: number; y: number; z: number };
+  yOffset: number;
+  damageToRender: number | string;
+}
+
+const DamageNumber = React.memo<DamageNumberProps>((props) => {
   const position = new Vector3(
     props.playerPosition.x,
     props.playerPosition.y + props.yOffset,
@@ -33,7 +39,7 @@ const DamageNumber = (props) => {
     displayText = "BLOCKED";
   }
 
-  console.log(`💥 Rendering damage number: ${damageValue} (type: ${isBlocked ? 'blocked' : isZeroDamage ? 'zero' : 'normal'} damage)`);
+
 
   return (
     <Html
@@ -46,6 +52,6 @@ const DamageNumber = (props) => {
       {displayText}
     </Html>
   );
-};
+});
 
 export default DamageNumber;

@@ -152,8 +152,6 @@ const Api = (props) => {
 
           console.log(`💥 Combat Store: Applied ${damageInfo.attackType} attack - ${damage} damage from ${attackerId} to ${targetId}, new health: ${newHealth}`);
         }
-          }
-        }
       }
 
       if (messageObject.connections) {
