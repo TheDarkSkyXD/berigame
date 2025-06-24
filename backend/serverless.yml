@@ -4,7 +4,7 @@ app: berigame
 #    docs.serverless.com
 
 service: berigame-api
-frameworkVersion: '4.17.0'
+frameworkVersion: '3'
 
 provider:
   name: aws
