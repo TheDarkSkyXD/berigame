@@ -52,8 +52,8 @@ const PlayerController = (props) => {
   const [isPlayingDeathAnimation, setIsPlayingDeathAnimation] = useState(false);
 
   // Attack animation timing - matches backend cooldown
-  const [lastAttackAnimationTime, setLastAttackAnimationTime] = useState(Date.now() - 6000); // Initialize to allow immediate first attack
-  const ATTACK_COOLDOWN_MS = 6000; // Match backend cooldown
+  const [lastAttackAnimationTime, setLastAttackAnimationTime] = useState(Date.now() - 1000); // Initialize to allow immediate first attack
+  const ATTACK_COOLDOWN_MS = 1000; // Match backend 1-second rate limiting
 
   // Animation state management
   const [currentAnimationState, setCurrentAnimationState] = useState<'idle' | 'walk' | 'attack' | 'death'>('idle');

@@ -44,6 +44,7 @@ export const useWebsocketStore = create((set) => ({
 export const useOtherUsersStore = create((set) => ({
   userPositions: {},
   // Note: damageToRender and playerHealths moved to combatStore for unified state management
+  // Enhanced damage handling (including BLOCKED attacks) is now handled in combatStore
   setUserPositions: (newUserPositions) =>
     set({ userPositions: { ...newUserPositions } }),
   setUserPosition: (newData) =>

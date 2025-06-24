@@ -127,16 +127,31 @@ const Api = (props) => {
         updateUserPosition(messageObject);
         if (messageObject.attackingPlayer && messageObject.damageGiven) {
           // Use unified combat store for atomic damage and health updates
-          const damageData = messageObject.damageGiven;
+          const damageInfo = messageObject.damageGiven;
           const attackerId = messageObject.attackingPlayer;
-          const targetId = damageData.receivingPlayer;
-          const damage = damageData.damage;
-          const newHealth = damageData.newHealth;
+          const targetId = damageInfo.receivingPlayer;
+          const damage = damageInfo.damage;
+          const newHealth = damageInfo.newHealth;
 
-          if (newHealth !== undefined) {
-            // Apply damage and update health atomically to prevent race conditions
-            applyDamageAndUpdateHealth(attackerId, targetId, damage, newHealth);
-            console.log(`💥 Combat Store: Applied damage ${damage} from ${attackerId} to ${targetId}, new health: ${newHealth}`);
+          // Process damage display based on attack type using unified combat store
+          if (damageInfo.attackType === 'hit') {
+            // Show damage numbers for successful hits (including 0 damage)
+            console.log(`💥 Processing hit: ${damage} damage to ${targetId} (type: ${damageInfo.attackType})`);
+            if (newHealth !== undefined) {
+              // Apply damage and update health atomically to prevent race conditions
+              applyDamageAndUpdateHealth(attackerId, targetId, damage, newHealth);
+            }
+          } else if (damageInfo.attackType === 'blocked') {
+            // Show blocked attack feedback differently using combat store
+            console.log(`🛡️ Processing blocked attack to ${targetId} (cooldown: ${damageInfo.remainingCooldown}ms)`);
+            if (newHealth !== undefined) {
+              // Apply blocked attack with special damage indicator
+              applyDamageAndUpdateHealth(attackerId, targetId, 'BLOCKED', newHealth);
+            }
+          }
+
+          console.log(`💥 Combat Store: Applied ${damageInfo.attackType} attack - ${damage} damage from ${attackerId} to ${targetId}, new health: ${newHealth}`);
+        }
           }
         }
       }
