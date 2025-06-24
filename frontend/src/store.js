@@ -54,12 +54,26 @@ export const useOtherUsersStore = create((set) => ({
     })),
   addDamageToRender: (newData) =>
     set((state) => {
-      console.log(`📝 Store: Adding damage to render for ${newData.receivingPlayer}:`, newData.damage);
+      console.log(`📝 Store: Adding damage to render for ${newData.receivingPlayer}:`, newData.damage, `(type: ${newData.attackType || 'unknown'})`);
       console.log(`📝 Store: Current damageToRender state:`, state.damageToRender);
+
       const existingDamage = state.damageToRender[newData.receivingPlayer];
-      const newDamage = (existingDamage !== null && existingDamage !== undefined)
-        ? existingDamage + newData.damage
-        : newData.damage;
+      let newDamage;
+
+      // Handle different damage types
+      if (newData.damage === 'BLOCKED') {
+        // Blocked attacks always replace existing damage display
+        newDamage = 'BLOCKED';
+      } else if (typeof newData.damage === 'number') {
+        // Numeric damage accumulates if there's existing damage
+        newDamage = (existingDamage !== null && existingDamage !== undefined && typeof existingDamage === 'number')
+          ? existingDamage + newData.damage
+          : newData.damage;
+      } else {
+        // Other types replace existing damage
+        newDamage = newData.damage;
+      }
+
       const newState = {
         ...state.damageToRender,
         [newData.receivingPlayer]: newDamage,

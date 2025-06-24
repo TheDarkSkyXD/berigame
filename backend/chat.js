@@ -31,26 +31,17 @@ const logDynamoDBCall = (operation, params) => {
   const startTime = Date.now();
   const operationId = `${operation}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-  console.log(`🔵 [${operationId}] Starting DynamoDB ${operation}`, {
-    operation,
-    table: params.TableName,
-    key: params.Key || 'N/A',
-    timestamp: new Date().toISOString()
-  });
+  // Only log start for slow operations or when debugging
+  // console.log(`🔵 [${operationId}] Starting DynamoDB ${operation}`);
 
   return {
     operationId,
     startTime,
     finish: () => {
       const duration = Date.now() - startTime;
-      console.log(`🟢 [${operationId}] Completed DynamoDB ${operation} in ${duration}ms`, {
-        operation,
-        duration,
-        timestamp: new Date().toISOString()
-      });
-
+      // Only log slow operations to reduce noise
       if (duration > 500) {
-        console.warn(`🐌 [${operationId}] Slow DynamoDB operation: ${operation} took ${duration}ms`);
+        console.warn(`🐌 [${operationId}] Slow DynamoDB ${operation}: ${duration}ms`);
       }
 
       return duration;
@@ -60,6 +51,80 @@ const logDynamoDBCall = (operation, params) => {
 
 const DB = process.env.DB;
 const positionValidator = new PositionValidator(DB);
+
+// Attack cooldown system - server-side with 1-second rate limiting
+const ATTACK_COOLDOWN_MS = 1000; // 1 second rate limiting per player
+
+/**
+ * Check if player can attack based on database-stored last attack time
+ * @param {string} connectionId - Player's connection ID
+ * @param {string} chatRoomId - Chat room ID
+ * @returns {Promise<{canAttack: boolean, cooldownRemaining: number, lastAttackTime: number}>}
+ */
+const checkPlayerAttackCooldown = async (connectionId, chatRoomId) => {
+  const playerParams = {
+    TableName: process.env.DB,
+    Key: {
+      PK: chatRoomId,
+      SK: "CONNECTION#" + connectionId,
+    },
+    ProjectionExpression: "lastAttackTime"
+  };
+
+  try {
+    const cooldownTimer = logDynamoDBCall('get', playerParams);
+    const playerData = await dynamodb.get(playerParams).promise();
+    cooldownTimer.finish();
+
+    const lastAttackTime = playerData.Item?.lastAttackTime || 0;
+    const currentTime = Date.now();
+    const timeSinceLastAttack = currentTime - lastAttackTime;
+    const canAttack = timeSinceLastAttack >= ATTACK_COOLDOWN_MS;
+    const cooldownRemaining = canAttack ? 0 : ATTACK_COOLDOWN_MS - timeSinceLastAttack;
+
+    return {
+      canAttack,
+      cooldownRemaining,
+      lastAttackTime
+    };
+  } catch (error) {
+    console.error(`Error checking attack cooldown for ${connectionId}:`, error);
+    // On error, allow attack but log the issue
+    return {
+      canAttack: true,
+      cooldownRemaining: 0,
+      lastAttackTime: 0
+    };
+  }
+};
+
+/**
+ * Update player's last attack time in database
+ * @param {string} connectionId - Player's connection ID
+ * @param {string} chatRoomId - Chat room ID
+ * @param {number} attackTime - Timestamp of the attack
+ */
+const updatePlayerAttackTime = async (connectionId, chatRoomId, attackTime) => {
+  const updateParams = {
+    TableName: process.env.DB,
+    Key: {
+      PK: chatRoomId,
+      SK: "CONNECTION#" + connectionId,
+    },
+    UpdateExpression: "SET lastAttackTime = :attackTime",
+    ExpressionAttributeValues: {
+      ":attackTime": attackTime
+    }
+  };
+
+  try {
+    const attackTimer = logDynamoDBCall('update', updateParams);
+    await dynamodb.update(updateParams).promise();
+    attackTimer.finish();
+  } catch (error) {
+    console.error(`Error updating attack time for ${connectionId}:`, error);
+  }
+};
 
 // Log levels: ERROR = 0, WARN = 1, INFO = 2, DEBUG = 3
 const LOG_LEVEL = parseInt(process.env.LOG_LEVEL) || 1; // Default to WARN level
@@ -517,22 +582,13 @@ exports.handler = async function (event, context) {
 
       console.log(`Player ${connectionId} took ${damage} damage, new health: ${newHealth}`);
 
-      // Broadcast health update to all players
-      const connections = await getCachedConnections(chatRoomId);
-      const healthUpdateMessage = {
-        playerHealthUpdate: true,
-        playerId: connectionId,
-        newHealth: newHealth,
-        timestamp: Date.now(),
-        chatRoomId: chatRoomId,
-      };
-
-      await broadcastToConnections(connections, healthUpdateMessage);
-
       // Check for death after dealing damage
       if (newHealth <= 0) {
         await handlePlayerDeath(connectionId, chatRoomId);
       }
+
+      // Return the new health value instead of broadcasting separately
+      return newHealth;
     } catch (e) {
       console.error(
         "Unable to update item. Error JSON:",
@@ -614,6 +670,8 @@ exports.handler = async function (event, context) {
           // Position validation fields
           lastValidPosition: SPAWN_LOCATION.position,
           lastPositionUpdate: timestamp,
+          // Attack cooldown tracking
+          lastAttackTime: 0, // Initialize to allow immediate first attack
           positionHistory: [{ position: SPAWN_LOCATION.position, timestamp }],
           violationCount: 0,
           lastViolationTime: 0,
@@ -697,7 +755,8 @@ exports.handler = async function (event, context) {
         const currentTimestamp = Date.now();
         const incomingPosition = bodyAsJSON.message.position;
 
-        console.log(`🔍 [${connectionId}] SendUpdate started at ${caseStartTime}`);
+        // Focus on attack timing only
+        // console.log(`🔍 [${connectionId}] SendUpdate started at ${caseStartTime}`);
 
         // Validate position update
         const validationStartTime = Date.now();
@@ -741,19 +800,46 @@ exports.handler = async function (event, context) {
         bodyAsJSON.message.serverValidated = true;
         bodyAsJSON.message.validationTimestamp = currentTimestamp;
 
-        //TODO VERIFY CAN ATTACK (SECURITY)
+        // Server-side attack validation with database-backed cooldown
         const attackingPlayer = bodyAsJSON.message.attackingPlayer;
         let damage = 0;
         if (attackingPlayer) {
-          // Allow 0 damage - random damage from 0 to 3
-          damage = Math.floor(Math.random() * 4);
-          bodyAsJSON.message.damageGiven = {
-            receivingPlayer: attackingPlayer,
-            damage,
-          };
-          // Only deal damage if damage > 0
-          if (damage > 0) {
-            await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+          const currentTime = Date.now();
+
+          // Check attack cooldown from database
+          const cooldownCheck = await checkPlayerAttackCooldown(connectionId, bodyAsJSON.chatRoomId);
+
+          if (cooldownCheck.canAttack) {
+            // Allow 0 damage - random damage from 0 to 3
+            damage = Math.floor(Math.random() * 4);
+            bodyAsJSON.message.damageGiven = {
+              receivingPlayer: attackingPlayer,
+              damage,
+              cooldownRemaining: 0,
+              attackAllowed: true
+            };
+
+            // Update attack time in database
+            await updatePlayerAttackTime(connectionId, bodyAsJSON.chatRoomId, currentTime);
+
+            // Deal damage and get new health if damage > 0
+            if (damage > 0) {
+              const newHealth = await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+              // Include the new health in the attack message to consolidate updates
+              bodyAsJSON.message.damageGiven.newHealth = newHealth;
+            }
+
+            const timeSinceLastAttack = currentTime - cooldownCheck.lastAttackTime;
+            console.log(`⚔️ [${currentTime}] ${connectionId} → ${attackingPlayer}: ${damage} damage (gap: ${timeSinceLastAttack}ms)`);
+          } else {
+            // Attack is on cooldown, don't process damage but include cooldown info
+            console.log(`🛡️ [${currentTime}] ${connectionId} attack blocked (cooldown: ${cooldownCheck.cooldownRemaining}ms remaining)`);
+            bodyAsJSON.message.damageGiven = {
+              receivingPlayer: attackingPlayer,
+              damage: 0,
+              cooldownRemaining: cooldownCheck.cooldownRemaining,
+              attackAllowed: false
+            };
           }
         }
 
@@ -1507,6 +1593,11 @@ exports.handler = async function (event, context) {
   // successfully.
   // Otherwise, API Gateway will return a 500 to the client.
   return { statusCode: 200 };
+};
+
+// Export handler for testing
+module.exports = {
+  handler: exports.handler,
 };
 
 // /openChatRoom - get messages for chatroom

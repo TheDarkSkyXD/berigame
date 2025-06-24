@@ -129,9 +129,37 @@ const Api = (props) => {
       if (messageObject.position && messageObject.userId) {
         updateUserPosition(messageObject);
         if (messageObject.attackingPlayer && messageObject.damageGiven) {
-          // Process damage to show on the target player
-          // Everyone should see damage numbers on the target (including the target themselves)
-          addDamageToRender(messageObject.damageGiven);
+          const damageInfo = messageObject.damageGiven;
+          const targetPlayerId = damageInfo.receivingPlayer;
+
+          // Process damage display based on attack type
+          if (damageInfo.attackType === 'hit') {
+            // Show damage numbers for successful hits (including 0 damage)
+            console.log(`💥 Processing hit: ${damageInfo.damage} damage to ${targetPlayerId} (type: ${damageInfo.attackType})`);
+            addDamageToRender(damageInfo);
+          } else if (damageInfo.attackType === 'blocked') {
+            // Show blocked attack feedback differently
+            console.log(`🛡️ Processing blocked attack to ${targetPlayerId} (cooldown: ${damageInfo.remainingCooldown}ms)`);
+            // Add blocked attack to render with special indicator
+            addDamageToRender({
+              ...damageInfo,
+              damage: 'BLOCKED' // Special indicator for blocked attacks
+            });
+          }
+
+          // Always handle health updates for consistent message flow
+          // This ensures 0 damage attacks still trigger health update messages
+          if (damageInfo.newHealth !== undefined) {
+            if (targetPlayerId === userConnectionId) {
+              // Update own health from consolidated attack message
+              console.log(`❤️ Attack ${damageInfo.attackType} - Own player health: ${useUserStateStore.getState().health} -> ${damageInfo.newHealth}`);
+              setHealth(damageInfo.newHealth);
+            } else {
+              // Update other player's health from consolidated attack message
+              console.log(`❤️ Attack ${damageInfo.attackType} - Other player ${targetPlayerId} health: ${damageInfo.newHealth}`);
+              setPlayerHealth(targetPlayerId, damageInfo.newHealth);
+            }
+          }
         }
       }
 
@@ -234,7 +262,7 @@ const Api = (props) => {
         // Update health if different
         const currentHealth = useUserStateStore.getState().health;
         if (currentHealth !== gameState.health) {
-          console.log(`Syncing health: ${currentHealth} -> ${gameState.health}`);
+          console.log(`❤️ Backend sync - Own player health: ${currentHealth} -> ${gameState.health}`);
           setHealth(gameState.health);
         }
 
@@ -261,6 +289,7 @@ const Api = (props) => {
         if (messageObject.playerId === userConnectionId) {
           setIsDead(false);
           setIsRespawning(true);
+          console.log(`❤️ Respawn - Own player health restored to: ${messageObject.health}`);
           setHealth(messageObject.health);
           console.log("Current player is respawning");
 
@@ -270,6 +299,7 @@ const Api = (props) => {
           }, 1000);
         } else {
           // Update health for other players when they respawn
+          console.log(`❤️ Respawn - Other player ${messageObject.playerId} health restored to: ${messageObject.health}`);
           setPlayerHealth(messageObject.playerId, messageObject.health);
           console.log(
             `Other player ${messageObject.playerId} respawned with health ${messageObject.health}`
@@ -280,6 +310,7 @@ const Api = (props) => {
       // Handle berry consumption confirmation
       if (messageObject.berryConsumed) {
         console.log(`Berry consumed: ${messageObject.berryType}, health restored: ${messageObject.healthRestored}`);
+        console.log(`❤️ Berry consumption - Own player health: ${useUserStateStore.getState().health} -> ${messageObject.newHealth}`);
         setHealth(messageObject.newHealth);
 
         // Update inventory by requesting sync
@@ -299,14 +330,17 @@ const Api = (props) => {
         // This acknowledgment confirms the backend processed it successfully
       }
 
-      // Handle other player health updates
+      // Handle non-attack health updates (e.g., berry consumption, respawn)
+      // Note: Attack damage health updates are now consolidated in the attack message above
       if (messageObject.playerHealthUpdate) {
         // Update health for all players (including self for consistency)
         if (messageObject.playerId === userConnectionId) {
           // Update own health from backend
+          console.log(`❤️ Backend update - Own player health: ${messageObject.newHealth}`);
           setHealth(messageObject.newHealth);
         } else {
           // Update other player's health
+          console.log(`❤️ Backend update - Other player ${messageObject.playerId} health: ${messageObject.newHealth}`);
           setPlayerHealth(messageObject.playerId, messageObject.newHealth);
         }
       }

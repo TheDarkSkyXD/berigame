@@ -57,24 +57,33 @@ const RenderOtherUser = ({
   // Use centralized health if available, otherwise use local health
   const currentHealth = playerHealths[connectionId] !== undefined ? playerHealths[connectionId] : localHealth;
 
+  // Cleanup expired damage numbers with proper timing
   useEffect(() => {
-    // Check expired damage number
-    if (currentDamage?.timestamp < Date.now() - 1400) setCurrentDamage(null);
-  });
+    if (!currentDamage) return;
+
+    const timeoutId = setTimeout(() => {
+      console.log(`💥 Damage counter expired for other player ${connectionId}: ${currentDamage?.val}`);
+      setCurrentDamage(null);
+    }, 1400);
+
+    return () => clearTimeout(timeoutId);
+  }, [currentDamage, connectionId]);
 
   useEffect(() => {
     const userDamage = damageToRender[connectionId];
     if (userDamage !== null && userDamage !== undefined) {
+      console.log(`💥 Setting damage counter for other player ${connectionId}: ${userDamage}`);
       // Set the damage number for display
       setCurrentDamage({ val: userDamage, timestamp: Date.now() });
       removeDamageToRender(connectionId);
     }
-  }, [damageToRender]);
+  }, [damageToRender, connectionId, removeDamageToRender]);
 
   // Update local health when centralized health changes (from backend or damage)
   useEffect(() => {
     if (playerHealths[connectionId] !== undefined) {
       const newHealth = playerHealths[connectionId];
+      console.log(`❤️ Other player ${connectionId} health updated: ${localHealth} -> ${newHealth}`);
       setLocalHealth(newHealth);
 
       // Check for death (visual feedback only - backend handles the actual death logic)
@@ -202,12 +211,15 @@ const RenderOtherUser = ({
             isOwnPlayer={false}
           />
           {currentDamage && (
-            <DamageNumber
-              key={currentDamage.timestamp}
-              playerPosition={copiedScene.position}
-              yOffset={1.5}
-              damageToRender={currentDamage.val}
-            />
+            <>
+              {console.log(`💥 Rendering damage component for other player ${connectionId}: ${currentDamage.val} at ${currentDamage.timestamp}`)}
+              <DamageNumber
+                key={currentDamage.timestamp}
+                playerPosition={copiedScene.position}
+                yOffset={1.5}
+                damageToRender={currentDamage.val}
+              />
+            </>
           )}
           {currentHealth <= 0 && (
             <ChatBubble
