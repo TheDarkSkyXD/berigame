@@ -14,6 +14,8 @@ const DamageNumber = (props) => {
     (isZeroDamage ? " zero-damage" : "") +
     (randBool ? " animation1" : " animation2");
 
+  console.log(`💥 Rendering damage number: ${props.damageToRender} (${isZeroDamage ? 'zero' : 'normal'} damage)`);
+
   return (
     <Html
       zIndexRange={[6, 4]}

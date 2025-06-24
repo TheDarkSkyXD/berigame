@@ -31,26 +31,17 @@ const logDynamoDBCall = (operation, params) => {
   const startTime = Date.now();
   const operationId = `${operation}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-  console.log(`🔵 [${operationId}] Starting DynamoDB ${operation}`, {
-    operation,
-    table: params.TableName,
-    key: params.Key || 'N/A',
-    timestamp: new Date().toISOString()
-  });
+  // Only log start for slow operations or when debugging
+  // console.log(`🔵 [${operationId}] Starting DynamoDB ${operation}`);
 
   return {
     operationId,
     startTime,
     finish: () => {
       const duration = Date.now() - startTime;
-      console.log(`🟢 [${operationId}] Completed DynamoDB ${operation} in ${duration}ms`, {
-        operation,
-        duration,
-        timestamp: new Date().toISOString()
-      });
-
+      // Only log slow operations to reduce noise
       if (duration > 500) {
-        console.warn(`🐌 [${operationId}] Slow DynamoDB operation: ${operation} took ${duration}ms`);
+        console.warn(`🐌 [${operationId}] Slow DynamoDB ${operation}: ${duration}ms`);
       }
 
       return duration;
@@ -60,6 +51,25 @@ const logDynamoDBCall = (operation, params) => {
 
 const DB = process.env.DB;
 const positionValidator = new PositionValidator(DB);
+
+// Attack cooldown system - moved outside handler to persist between calls
+const ATTACK_COOLDOWN_MS = 6000; // 4 seconds animation + 2 seconds cooldown (4x slower timing)
+const attackCooldowns = new Map(); // connectionId -> lastAttackTime
+
+const canPlayerAttack = (connectionId) => {
+  const lastAttackTime = attackCooldowns.get(connectionId) || 0;
+  const currentTime = Date.now();
+  return (currentTime - lastAttackTime) >= ATTACK_COOLDOWN_MS;
+};
+
+const setPlayerAttackCooldown = (connectionId) => {
+  attackCooldowns.set(connectionId, Date.now());
+};
+
+// Test helper function to clear cooldowns (only for testing)
+const clearAttackCooldowns = () => {
+  attackCooldowns.clear();
+};
 
 // Log levels: ERROR = 0, WARN = 1, INFO = 2, DEBUG = 3
 const LOG_LEVEL = parseInt(process.env.LOG_LEVEL) || 1; // Default to WARN level
@@ -697,7 +707,8 @@ exports.handler = async function (event, context) {
         const currentTimestamp = Date.now();
         const incomingPosition = bodyAsJSON.message.position;
 
-        console.log(`🔍 [${connectionId}] SendUpdate started at ${caseStartTime}`);
+        // Focus on attack timing only
+        // console.log(`🔍 [${connectionId}] SendUpdate started at ${caseStartTime}`);
 
         // Validate position update
         const validationStartTime = Date.now();
@@ -745,15 +756,31 @@ exports.handler = async function (event, context) {
         const attackingPlayer = bodyAsJSON.message.attackingPlayer;
         let damage = 0;
         if (attackingPlayer) {
-          // Allow 0 damage - random damage from 0 to 3
-          damage = Math.floor(Math.random() * 4);
-          bodyAsJSON.message.damageGiven = {
-            receivingPlayer: attackingPlayer,
-            damage,
-          };
-          // Only deal damage if damage > 0
-          if (damage > 0) {
-            await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+          const currentTime = Date.now();
+          const lastAttackTime = attackCooldowns.get(connectionId) || 0;
+          const timeSinceLastAttack = currentTime - lastAttackTime;
+
+          // Check if player can attack (cooldown check)
+          if (canPlayerAttack(connectionId)) {
+            // Allow 0 damage - random damage from 0 to 3
+            damage = Math.floor(Math.random() * 4);
+            bodyAsJSON.message.damageGiven = {
+              receivingPlayer: attackingPlayer,
+              damage,
+            };
+            // Set attack cooldown for this player
+            setPlayerAttackCooldown(connectionId);
+            // Only deal damage if damage > 0
+            if (damage > 0) {
+              await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+            }
+            console.log(`⚔️ [${currentTime}] ${connectionId} → ${attackingPlayer}: ${damage} damage (gap: ${timeSinceLastAttack}ms)`);
+          } else {
+            // Attack is on cooldown, don't process damage but still broadcast position
+            const remainingCooldown = ATTACK_COOLDOWN_MS - timeSinceLastAttack;
+            console.log(`🛡️ [${currentTime}] ${connectionId} attack blocked (cooldown: ${remainingCooldown}ms remaining, gap: ${timeSinceLastAttack}ms)`);
+            // Clear any damage info since attack is on cooldown
+            bodyAsJSON.message.damageGiven = null;
           }
         }
 
@@ -1507,6 +1534,12 @@ exports.handler = async function (event, context) {
   // successfully.
   // Otherwise, API Gateway will return a 500 to the client.
   return { statusCode: 200 };
+};
+
+// Export test helper functions for testing
+module.exports = {
+  handler: exports.handler,
+  clearAttackCooldowns: process.env.NODE_ENV === 'test' ? clearAttackCooldowns : undefined,
 };
 
 // /openChatRoom - get messages for chatroom
