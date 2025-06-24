@@ -29,7 +29,7 @@ jest.mock('../positionValidator', () => {
   return jest.fn().mockImplementation(() => mockPositionValidator);
 });
 
-const { handler, clearAttackCooldowns } = require('../chat.js');
+const { handler } = require('../chat.js');
 
 // Mock environment variables
 process.env.DB = 'test-table';
@@ -39,10 +39,7 @@ describe('Combat System', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    // Clear attack cooldowns between tests
-    if (clearAttackCooldowns) {
-      clearAttackCooldowns();
-    }
+    // Database-backed cooldowns don't need manual clearing between tests
 
     // Ensure we're not in development mode for tests
     delete process.env.IS_OFFLINE;
@@ -98,6 +95,15 @@ describe('Combat System', () => {
     const originalRandom = Math.random;
     Math.random = jest.fn(() => 0); // This will result in Math.floor(0 * 4) = 0
 
+    // Mock attack cooldown check - allow attack
+    mockDynamoDB.get.mockReturnValueOnce({
+      promise: () => Promise.resolve({
+        Item: {
+          lastAttackTime: 0 // No previous attack
+        }
+      })
+    });
+
     const event = {
       requestContext: {
         connectionId: 'test-connection',
@@ -120,20 +126,17 @@ describe('Combat System', () => {
     // Verify that the attack was processed
     expect(result.statusCode).toBe(200);
 
-    // Verify that dealDamage was NOT called for 0 damage (no health update)
+    // Verify that dealDamage was NOT called for 0 damage
     expect(mockDynamoDB.update).not.toHaveBeenCalledWith(
       expect.objectContaining({
         UpdateExpression: "SET health = health - :val",
       })
     );
 
-    // But verify that health was queried for consistent message flow
-    expect(mockDynamoDB.get).toHaveBeenCalledWith(
+    // Verify attack time was still updated (even for 0 damage)
+    expect(mockDynamoDB.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        Key: {
-          PK: 'test-room',
-          SK: 'CONNECTION#target-player',
-        },
+        UpdateExpression: "SET lastAttackTime = :attackTime",
       })
     );
 
@@ -145,6 +148,15 @@ describe('Combat System', () => {
     // Mock Math.random to return a value that results in positive damage
     const originalRandom = Math.random;
     Math.random = jest.fn(() => 0.75); // This will result in Math.floor(0.75 * 4) = 3
+
+    // Mock attack cooldown check - allow attack
+    mockDynamoDB.get.mockReturnValueOnce({
+      promise: () => Promise.resolve({
+        Item: {
+          lastAttackTime: 0 // No previous attack
+        }
+      })
+    });
 
     const event = {
       requestContext: {
@@ -200,9 +212,13 @@ describe('Combat System', () => {
     Math.random = originalRandom;
   });
 
-  test('should enforce attack cooldown', async () => {
+  test('should enforce attack cooldown with database-backed system', async () => {
     const originalRandom = Math.random;
+    const originalDateNow = Date.now;
     Math.random = jest.fn(() => 0.75); // This will result in 3 damage
+
+    let mockTime = 1000000; // Start at some arbitrary time
+    Date.now = jest.fn(() => mockTime);
 
     const event = {
       requestContext: {
@@ -221,9 +237,28 @@ describe('Combat System', () => {
       }),
     };
 
+    // Mock first attack - no previous attack time (allow attack)
+    mockDynamoDB.get.mockReturnValueOnce({
+      promise: () => Promise.resolve({
+        Item: {
+          lastAttackTime: 0 // No previous attack
+        }
+      })
+    });
+
     // First attack should succeed
     const result1 = await handler(event);
     expect(result1.statusCode).toBe(200);
+
+    // Verify attack time was updated in database
+    expect(mockDynamoDB.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        UpdateExpression: "SET lastAttackTime = :attackTime",
+        ExpressionAttributeValues: {
+          ":attackTime": mockTime,
+        },
+      })
+    );
 
     // Verify that dealDamage was called for the first attack
     expect(mockDynamoDB.update).toHaveBeenCalledWith(
@@ -238,6 +273,15 @@ describe('Combat System', () => {
     // Reset mock call count
     mockDynamoDB.update.mockClear();
 
+    // Mock second attack - recent attack time (block attack)
+    mockDynamoDB.get.mockReturnValueOnce({
+      promise: () => Promise.resolve({
+        Item: {
+          lastAttackTime: mockTime // Same time as first attack
+        }
+      })
+    });
+
     // Second attack immediately after should be blocked by cooldown
     const result2 = await handler(event);
     expect(result2.statusCode).toBe(200);
@@ -249,11 +293,19 @@ describe('Combat System', () => {
       })
     );
 
-    // Restore Math.random
+    // Verify that attack time was NOT updated (attack blocked)
+    expect(mockDynamoDB.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        UpdateExpression: "SET lastAttackTime = :attackTime",
+      })
+    );
+
+    // Restore mocks
     Math.random = originalRandom;
+    Date.now = originalDateNow;
   });
 
-  test('should allow attack after cooldown period', async () => {
+  test('should allow attack after 1-second cooldown period', async () => {
     const originalRandom = Math.random;
     const originalDateNow = Date.now;
 
@@ -279,6 +331,15 @@ describe('Combat System', () => {
       }),
     };
 
+    // Mock first attack - no previous attack time (allow attack)
+    mockDynamoDB.get.mockReturnValueOnce({
+      promise: () => Promise.resolve({
+        Item: {
+          lastAttackTime: 0 // No previous attack
+        }
+      })
+    });
+
     // First attack should succeed
     const result1 = await handler(event);
     expect(result1.statusCode).toBe(200);
@@ -296,8 +357,17 @@ describe('Combat System', () => {
     // Reset mock call count
     mockDynamoDB.update.mockClear();
 
-    // Advance time by 6 seconds (cooldown period)
-    mockTime += 6000;
+    // Advance time by 1 second (cooldown period)
+    mockTime += 1000;
+
+    // Mock second attack - old attack time (allow attack)
+    mockDynamoDB.get.mockReturnValueOnce({
+      promise: () => Promise.resolve({
+        Item: {
+          lastAttackTime: mockTime - 1000 // 1 second ago
+        }
+      })
+    });
 
     // Attack after cooldown should succeed
     const result3 = await handler(event);
@@ -310,6 +380,72 @@ describe('Combat System', () => {
         ExpressionAttributeValues: {
           ":val": 3,
         },
+      })
+    );
+
+    // Verify attack time was updated again
+    expect(mockDynamoDB.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        UpdateExpression: "SET lastAttackTime = :attackTime",
+        ExpressionAttributeValues: {
+          ":attackTime": mockTime,
+        },
+      })
+    );
+
+    // Restore mocks
+    Math.random = originalRandom;
+    Date.now = originalDateNow;
+  });
+
+  test('should include cooldown information in attack response messages', async () => {
+    const originalRandom = Math.random;
+    const originalDateNow = Date.now;
+    Math.random = jest.fn(() => 0.5); // This will result in 2 damage
+
+    let mockTime = 1000000;
+    Date.now = jest.fn(() => mockTime);
+
+    const event = {
+      requestContext: {
+        connectionId: 'test-connection-cooldown-info',
+        domainName: 'test-domain',
+        stage: 'test',
+        routeKey: 'sendUpdate',
+      },
+      body: JSON.stringify({
+        message: {
+          position: { x: 0, y: 0, z: 0 },
+          attackingPlayer: 'target-player',
+        },
+        chatRoomId: 'test-room',
+        connections: ['test-connection-cooldown-info', 'target-player'],
+      }),
+    };
+
+    // Mock attack on cooldown - recent attack time
+    mockDynamoDB.get.mockReturnValueOnce({
+      promise: () => Promise.resolve({
+        Item: {
+          lastAttackTime: mockTime - 500 // 500ms ago, still on cooldown
+        }
+      })
+    });
+
+    // Attack should be blocked and include cooldown info
+    const result = await handler(event);
+    expect(result.statusCode).toBe(200);
+
+    // Verify the response includes cooldown information
+    expect(mockAPIGateway.postToConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Data: expect.stringContaining('"cooldownRemaining":500')
+      })
+    );
+
+    expect(mockAPIGateway.postToConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Data: expect.stringContaining('"attackAllowed":false')
       })
     );
 
