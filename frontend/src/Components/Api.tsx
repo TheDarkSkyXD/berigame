@@ -9,6 +9,7 @@ import {
   useGroundItemsStore,
   useLoadingStore,
 } from "../store";
+import { useCombatStore } from "../stores/combatStore";
 import { connectToChatRoom } from "../Api";
 
 const Api = (props) => {
@@ -27,12 +28,11 @@ const Api = (props) => {
   const setUserPosition = useOtherUsersStore(
     (state: any) => state.setUserPosition
   );
-  const addDamageToRender = useOtherUsersStore(
-    (state: any) => state.addDamageToRender
-  );
-  const setPlayerHealth = useOtherUsersStore(
-    (state: any) => state.setPlayerHealth
-  );
+  // Combat store actions - replacing old damage and health management
+  const {
+    applyDamageAndUpdateHealth,
+    setPlayerHealth
+  } = useCombatStore();
   const setUserConnectionId = useUserStateStore(
     (state: any) => state.setUserConnectionId
   );
@@ -50,11 +50,8 @@ const Api = (props) => {
   const clearInventory = useInventoryStore((state: any) => state.clearInventory);
   const shouldValidate = useInventoryStore((state: any) => state.shouldValidate);
   const markValidated = useInventoryStore((state: any) => state.markValidated);
-  const setIsDead = useUserStateStore((state: any) => state.setIsDead);
-  const setIsRespawning = useUserStateStore(
-    (state: any) => state.setIsRespawning
-  );
-  const setHealth = useUserStateStore((state: any) => state.setHealth);
+  // Combat store actions for death/health management
+  const { setDeathState } = useCombatStore();
   const setPositionCorrection = useUserStateStore((state: any) => state.setPositionCorrection);
   const addGroundItem = useGroundItemsStore((state: any) => state.addGroundItem);
   const addGroundItemAndCleanup = useGroundItemsStore((state: any) => state.addGroundItemAndCleanup);
@@ -129,22 +126,17 @@ const Api = (props) => {
       if (messageObject.position && messageObject.userId) {
         updateUserPosition(messageObject);
         if (messageObject.attackingPlayer && messageObject.damageGiven) {
-          // Process damage to show on the target player
-          // Everyone should see damage numbers on the target (including the target themselves)
-          addDamageToRender(messageObject.damageGiven);
+          // Use unified combat store for atomic damage and health updates
+          const damageData = messageObject.damageGiven;
+          const attackerId = messageObject.attackingPlayer;
+          const targetId = damageData.receivingPlayer;
+          const damage = damageData.damage;
+          const newHealth = damageData.newHealth;
 
-          // Handle consolidated health update if included in attack message
-          if (messageObject.damageGiven.newHealth !== undefined) {
-            const targetPlayerId = messageObject.damageGiven.receivingPlayer;
-            if (targetPlayerId === userConnectionId) {
-              // Update own health from consolidated attack message
-              console.log(`❤️ Attack damage - Own player health: ${useUserStateStore.getState().health} -> ${messageObject.damageGiven.newHealth}`);
-              setHealth(messageObject.damageGiven.newHealth);
-            } else {
-              // Update other player's health from consolidated attack message
-              console.log(`❤️ Attack damage - Other player ${targetPlayerId} health: ${messageObject.damageGiven.newHealth}`);
-              setPlayerHealth(targetPlayerId, messageObject.damageGiven.newHealth);
-            }
+          if (newHealth !== undefined) {
+            // Apply damage and update health atomically to prevent race conditions
+            applyDamageAndUpdateHealth(attackerId, targetId, damage, newHealth);
+            console.log(`💥 Combat Store: Applied damage ${damage} from ${attackerId} to ${targetId}, new health: ${newHealth}`);
           }
         }
       }
@@ -245,11 +237,12 @@ const Api = (props) => {
           syncGroundItems(gameState.groundItems);
         }
 
-        // Update health if different
-        const currentHealth = useUserStateStore.getState().health;
+        // Update health if different using combat store
+        const { getPlayerHealth } = useCombatStore.getState();
+        const currentHealth = getPlayerHealth(userConnectionId).current;
         if (currentHealth !== gameState.health) {
           console.log(`❤️ Backend sync - Own player health: ${currentHealth} -> ${gameState.health}`);
-          setHealth(gameState.health);
+          setPlayerHealth(userConnectionId, gameState.health);
         }
 
         markValidated();
@@ -263,8 +256,9 @@ const Api = (props) => {
       // Handle death event
       if (messageObject.type === "playerDeath") {
         console.log("Player death event received:", messageObject);
-        if (messageObject.deadPlayerId === userConnectionId) {
-          setIsDead(true);
+        const deadPlayerId = messageObject.deadPlayerId;
+        setDeathState(deadPlayerId, true, false);
+        if (deadPlayerId === userConnectionId) {
           console.log("Current player has died");
         }
       }
@@ -272,32 +266,30 @@ const Api = (props) => {
       // Handle respawn event
       if (messageObject.type === "playerRespawn") {
         console.log("Player respawn event received:", messageObject);
-        if (messageObject.playerId === userConnectionId) {
-          setIsDead(false);
-          setIsRespawning(true);
-          console.log(`❤️ Respawn - Own player health restored to: ${messageObject.health}`);
-          setHealth(messageObject.health);
-          console.log("Current player is respawning");
+        const playerId = messageObject.playerId;
+        const health = messageObject.health;
 
-          // Reset respawning flag after a short delay
-          setTimeout(() => {
-            setIsRespawning(false);
-          }, 1000);
-        } else {
-          // Update health for other players when they respawn
-          console.log(`❤️ Respawn - Other player ${messageObject.playerId} health restored to: ${messageObject.health}`);
-          setPlayerHealth(messageObject.playerId, messageObject.health);
-          console.log(
-            `Other player ${messageObject.playerId} respawned with health ${messageObject.health}`
-          );
+        // Update health and death state atomically
+        setPlayerHealth(playerId, health);
+        setDeathState(playerId, false, true); // Not dead, but respawning
+
+        console.log(`❤️ Respawn - Player ${playerId} health restored to: ${health}`);
+
+        if (playerId === userConnectionId) {
+          console.log("Current player is respawning");
         }
+
+        // Reset respawning flag after a short delay
+        setTimeout(() => {
+          setDeathState(playerId, false, false); // Not dead, not respawning
+        }, 1000);
       }
 
       // Handle berry consumption confirmation
       if (messageObject.berryConsumed) {
         console.log(`Berry consumed: ${messageObject.berryType}, health restored: ${messageObject.healthRestored}`);
-        console.log(`❤️ Berry consumption - Own player health: ${useUserStateStore.getState().health} -> ${messageObject.newHealth}`);
-        setHealth(messageObject.newHealth);
+        console.log(`❤️ Berry consumption - Own player health restored to: ${messageObject.newHealth}`);
+        setPlayerHealth(userConnectionId, messageObject.newHealth);
 
         // Update inventory by requesting sync
         if (websocketConnection && websocketConnection.readyState === WebSocket.OPEN) {
@@ -319,16 +311,12 @@ const Api = (props) => {
       // Handle non-attack health updates (e.g., berry consumption, respawn)
       // Note: Attack damage health updates are now consolidated in the attack message above
       if (messageObject.playerHealthUpdate) {
-        // Update health for all players (including self for consistency)
-        if (messageObject.playerId === userConnectionId) {
-          // Update own health from backend
-          console.log(`❤️ Backend update - Own player health: ${messageObject.newHealth}`);
-          setHealth(messageObject.newHealth);
-        } else {
-          // Update other player's health
-          console.log(`❤️ Backend update - Other player ${messageObject.playerId} health: ${messageObject.newHealth}`);
-          setPlayerHealth(messageObject.playerId, messageObject.newHealth);
-        }
+        // Update health for all players using unified combat store
+        const playerId = messageObject.playerId;
+        const newHealth = messageObject.newHealth;
+
+        console.log(`❤️ Backend update - Player ${playerId} health: ${newHealth}`);
+        setPlayerHealth(playerId, newHealth);
       }
       // Handle ground item events
       if (messageObject.type === "groundItemCreated") {

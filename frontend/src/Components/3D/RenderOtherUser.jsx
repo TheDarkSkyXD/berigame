@@ -14,6 +14,7 @@ import {
   useUserInputStore,
   useUserStateStore,
 } from "../../store";
+import { useCombatState } from "../../hooks/useCombatState";
 import ChatBubble from "./ChatBubble";
 import HealthBar from "./HealthBar";
 import DamageNumber from "./DamageNumber";
@@ -44,61 +45,23 @@ const RenderOtherUser = ({
   );
   const setUserFollowing = useUserStateStore((state) => state.setUserFollowing);
   const setUserAttacking = useUserStateStore((state) => state.setUserAttacking);
-  const damageToRender = useOtherUsersStore((state) => state.damageToRender);
-  const removeDamageToRender = useOtherUsersStore(
-    (state) => state.removeDamageToRender
-  );
-  const playerHealths = useOtherUsersStore((state) => state.playerHealths);
-  const setPlayerHealth = useOtherUsersStore((state) => state.setPlayerHealth);
 
-  const [localHealth, setLocalHealth] = useState(30);
-  const [currentDamage, setCurrentDamage] = useState(null);
+  // Use unified combat state for this player
+  const combatState = useCombatState(connectionId);
 
-  // Use centralized health if available, otherwise use local health
-  const currentHealth = playerHealths[connectionId] !== undefined ? playerHealths[connectionId] : localHealth;
-
-  // Cleanup expired damage numbers with proper timing
+  // Handle death/respawn animations based on combat state
   useEffect(() => {
-    if (!currentDamage) return;
-
-    const timeoutId = setTimeout(() => {
-      console.log(`💥 Damage counter expired for other player ${connectionId}: ${currentDamage?.val}`);
-      setCurrentDamage(null);
-    }, 1400);
-
-    return () => clearTimeout(timeoutId);
-  }, [currentDamage, connectionId]);
-
-  useEffect(() => {
-    const userDamage = damageToRender[connectionId];
-    if (userDamage !== null && userDamage !== undefined) {
-      console.log(`💥 Setting damage counter for other player ${connectionId}: ${userDamage}`);
-      // Set the damage number for display
-      setCurrentDamage({ val: userDamage, timestamp: Date.now() });
-      removeDamageToRender(connectionId);
+    if (combatState.isDead) {
+      console.log(`Other player ${connectionId} appears to have died`);
+      // Stop animations for dead player
+      actions["Walk"]?.stop();
+      actions["RightHook"]?.stop();
+      actions["Idle"]?.stop();
+    } else if (!combatState.isDead && combatState.health > 0) {
+      // If player is alive, ensure idle animation is playing
+      actions["Idle"]?.play();
     }
-  }, [damageToRender, connectionId, removeDamageToRender]);
-
-  // Update local health when centralized health changes (from backend or damage)
-  useEffect(() => {
-    if (playerHealths[connectionId] !== undefined) {
-      const newHealth = playerHealths[connectionId];
-      console.log(`❤️ Other player ${connectionId} health updated: ${localHealth} -> ${newHealth}`);
-      setLocalHealth(newHealth);
-
-      // Check for death (visual feedback only - backend handles the actual death logic)
-      if (newHealth <= 0) {
-        console.log(`Other player ${connectionId} appears to have died`);
-        // Stop animations for dead player
-        actions["Walk"]?.stop();
-        actions["RightHook"]?.stop();
-        actions["Idle"]?.stop();
-      } else if (newHealth > 0 && localHealth <= 0) {
-        // If player respawned (health restored), restart idle animation
-        actions["Idle"]?.play();
-      }
-    }
-  }, [playerHealths[connectionId]]);
+  }, [combatState.isDead, combatState.health, connectionId, actions]);
 
   useEffect(() => {
     if (isAttacking) {
@@ -205,23 +168,23 @@ const RenderOtherUser = ({
         <>
           <HealthBar
             playerPosition={copiedScene.position}
-            health={Math.max(0, currentHealth)}
-            maxHealth={30}
+            health={Math.max(0, combatState.health)}
+            maxHealth={combatState.maxHealth}
             yOffset={2.5}
             isOwnPlayer={false}
           />
-          {currentDamage && (
+          {combatState.damage !== null && (
             <>
-              {console.log(`💥 Rendering damage component for other player ${connectionId}: ${currentDamage.val} at ${currentDamage.timestamp}`)}
+              {console.log(`💥 Rendering damage component for other player ${connectionId}: ${combatState.damage} at ${combatState.damageTimestamp}`)}
               <DamageNumber
-                key={currentDamage.timestamp}
+                key={combatState.damageTimestamp}
                 playerPosition={copiedScene.position}
                 yOffset={1.5}
-                damageToRender={currentDamage.val}
+                damageToRender={combatState.damage}
               />
             </>
           )}
-          {currentHealth <= 0 && (
+          {combatState.isDead && (
             <ChatBubble
               playerPosition={copiedScene.position}
               yOffset={3.5}

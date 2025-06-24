@@ -43,37 +43,7 @@ export const useWebsocketStore = create((set) => ({
 
 export const useOtherUsersStore = create((set) => ({
   userPositions: {},
-  damageToRender: {},
-  playerHealths: {},
-  removeDamageToRender: (connectionId) =>
-    set((state) => ({
-      damageToRender: {
-        ...state.damageToRender,
-        [connectionId]: null,
-      },
-    })),
-  addDamageToRender: (newData) =>
-    set((state) => {
-      console.log(`📝 Store: Adding damage to render for ${newData.receivingPlayer}:`, newData.damage);
-      console.log(`📝 Store: Current damageToRender state:`, state.damageToRender);
-      const existingDamage = state.damageToRender[newData.receivingPlayer];
-      const newDamage = (existingDamage !== null && existingDamage !== undefined)
-        ? existingDamage + newData.damage
-        : newData.damage;
-      const newState = {
-        ...state.damageToRender,
-        [newData.receivingPlayer]: newDamage,
-      };
-      console.log(`📝 Store: New damageToRender state:`, newState);
-      return { damageToRender: newState };
-    }),
-  setPlayerHealth: (playerId, health) =>
-    set((state) => ({
-      playerHealths: {
-        ...state.playerHealths,
-        [playerId]: health,
-      },
-    })),
+  // Note: damageToRender and playerHealths moved to combatStore for unified state management
   setUserPositions: (newUserPositions) =>
     set({ userPositions: { ...newUserPositions } }),
   setUserPosition: (newData) =>
@@ -86,19 +56,13 @@ export const useUserStateStore = create((set) => ({
   userConnectionId: null,
   userFollowing: null,
   userAttacking: null,
-  isDead: false,
-  isRespawning: false,
-  health: 30,
-  maxHealth: 30,
+  // Note: isDead, isRespawning, health, maxHealth moved to combatStore for unified state management
   position: { x: 0, y: 0, z: 0 }, // Add position tracking
   positionCorrection: null,
   setUserConnectionId: (id) => set({ userConnectionId: id }),
   setUserFollowing: (newObject) => set({ userFollowing: newObject }),
   setUserAttacking: (newObject) => set({ userAttacking: newObject }),
-  setIsDead: (isDead) => set({ isDead }),
-  setIsRespawning: (isRespawning) => set({ isRespawning }),
-  setHealth: (health) => set({ health }),
-  setMaxHealth: (maxHealth) => set({ maxHealth }),
+  // Note: setIsDead, setIsRespawning, setHealth, setMaxHealth moved to combatStore
   setPosition: (position) => set({ position }), // Add position setter
   setPositionCorrection: (correction) => set({ positionCorrection: correction }),
   clearPositionCorrection: () => set({ positionCorrection: null }),
