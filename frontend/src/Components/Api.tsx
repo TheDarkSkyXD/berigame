@@ -132,6 +132,20 @@ const Api = (props) => {
           // Process damage to show on the target player
           // Everyone should see damage numbers on the target (including the target themselves)
           addDamageToRender(messageObject.damageGiven);
+
+          // Handle consolidated health update if included in attack message
+          if (messageObject.damageGiven.newHealth !== undefined) {
+            const targetPlayerId = messageObject.damageGiven.receivingPlayer;
+            if (targetPlayerId === userConnectionId) {
+              // Update own health from consolidated attack message
+              console.log(`❤️ Attack damage - Own player health: ${useUserStateStore.getState().health} -> ${messageObject.damageGiven.newHealth}`);
+              setHealth(messageObject.damageGiven.newHealth);
+            } else {
+              // Update other player's health from consolidated attack message
+              console.log(`❤️ Attack damage - Other player ${targetPlayerId} health: ${messageObject.damageGiven.newHealth}`);
+              setPlayerHealth(targetPlayerId, messageObject.damageGiven.newHealth);
+            }
+          }
         }
       }
 
@@ -302,7 +316,8 @@ const Api = (props) => {
         // This acknowledgment confirms the backend processed it successfully
       }
 
-      // Handle other player health updates
+      // Handle non-attack health updates (e.g., berry consumption, respawn)
+      // Note: Attack damage health updates are now consolidated in the attack message above
       if (messageObject.playerHealthUpdate) {
         // Update health for all players (including self for consistency)
         if (messageObject.playerId === userConnectionId) {

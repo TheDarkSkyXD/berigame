@@ -286,8 +286,8 @@ describe('Combat System', () => {
     // Reset mock call count
     mockDynamoDB.update.mockClear();
 
-    // Advance time by 2 seconds (cooldown period)
-    mockTime += 2000;
+    // Advance time by 6 seconds (cooldown period)
+    mockTime += 6000;
 
     // Attack after cooldown should succeed
     const result3 = await handler(event);

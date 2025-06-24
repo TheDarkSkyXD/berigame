@@ -527,22 +527,13 @@ exports.handler = async function (event, context) {
 
       console.log(`Player ${connectionId} took ${damage} damage, new health: ${newHealth}`);
 
-      // Broadcast health update to all players
-      const connections = await getCachedConnections(chatRoomId);
-      const healthUpdateMessage = {
-        playerHealthUpdate: true,
-        playerId: connectionId,
-        newHealth: newHealth,
-        timestamp: Date.now(),
-        chatRoomId: chatRoomId,
-      };
-
-      await broadcastToConnections(connections, healthUpdateMessage);
-
       // Check for death after dealing damage
       if (newHealth <= 0) {
         await handlePlayerDeath(connectionId, chatRoomId);
       }
+
+      // Return the new health value instead of broadcasting separately
+      return newHealth;
     } catch (e) {
       console.error(
         "Unable to update item. Error JSON:",
@@ -770,9 +761,11 @@ exports.handler = async function (event, context) {
             };
             // Set attack cooldown for this player
             setPlayerAttackCooldown(connectionId);
-            // Only deal damage if damage > 0
+            // Deal damage and get new health if damage > 0
             if (damage > 0) {
-              await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+              const newHealth = await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
+              // Include the new health in the attack message to consolidate updates
+              bodyAsJSON.message.damageGiven.newHealth = newHealth;
             }
             console.log(`⚔️ [${currentTime}] ${connectionId} → ${attackingPlayer}: ${damage} damage (gap: ${timeSinceLastAttack}ms)`);
           } else {
