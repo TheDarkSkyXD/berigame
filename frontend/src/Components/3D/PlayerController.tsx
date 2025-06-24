@@ -242,8 +242,8 @@ const PlayerController = (props) => {
               position: objRef.current.position,
               restPosition: objRef.current.position,
               rotation: obj.rotation,
-              attackingPlayer: userAttacking,
               isWalking: false,
+              // Don't include attackingPlayer - this is just a position update
             },
             websocketConnection,
             allConnections
@@ -257,8 +257,8 @@ const PlayerController = (props) => {
         position: objRef.current.position,
         restPosition: pointOnLand,
         rotation: obj.rotation,
-        attackingPlayer: userAttacking,
         isWalking: true,
+        // Don't include attackingPlayer - this is just a position update
       },
       websocketConnection,
       allConnections
@@ -316,14 +316,14 @@ const PlayerController = (props) => {
           const transactionId = combatState.applyOptimistic(userConnectionId, 2);
           console.log(`⚡ Applied optimistic damage on attack animation (txn: ${transactionId})`);
 
-          // Send attack message with transaction ID immediately
+          // Send ATTACK message with transaction ID - this is the only place we send attackingPlayer
           webSocketSendUpdate(
             {
               position: objRef.current.position,
               restPosition: objRef.current.position,
               rotation: obj.rotation,
               isWalking: false,
-              attackingPlayer: userAttacking,
+              attackingPlayer: userAttacking, // Only include this for actual attacks
               optimisticTransactionId: transactionId,
             },
             websocketConnection,
@@ -349,13 +349,8 @@ const PlayerController = (props) => {
     }
   };
 
-  useEffect(() => {
-    if (!userFollowing) return;
-    clearInterval(followingInterval);
-    // Reduce frequency to prevent rapid attack triggering
-    setFollowingInterval(setInterval(walkTowardsOtherPlayer, 1000));
-    return () => clearInterval(followingInterval);
-  }, [currentTween]);
+  // Removed duplicate interval - this was causing multiple attacks
+  // The interval is now only managed in the userFollowing useEffect below
 
   const walkTowardsOtherPlayer = () => {
     const separation = 1.5;
@@ -365,17 +360,21 @@ const PlayerController = (props) => {
     if (distance < 1) {
       onPositionUpdate();
       obj.lookAt(pointOnLand);
-      webSocketSendUpdate(
-        {
-          position: objRef.current.position,
-          restPosition: objRef.current.position,
-          rotation: obj.rotation,
-          isWalking: true,
-          attackingPlayer: userAttacking,
-        },
-        websocketConnection,
-        allConnections
-      );
+
+      // Only send position update if not currently attacking to prevent multiple attack messages
+      if (currentAnimationStateRef.current !== 'attack') {
+        webSocketSendUpdate(
+          {
+            position: objRef.current.position,
+            restPosition: objRef.current.position,
+            rotation: obj.rotation,
+            isWalking: true,
+            // Don't include attackingPlayer - this is just a position update
+          },
+          websocketConnection,
+          allConnections
+        );
+      }
       return;
     }
     const dirV = new Vector3();
@@ -400,7 +399,7 @@ const PlayerController = (props) => {
         restPosition: objRef.current.position,
         rotation: obj.rotation,
         isWalking: false,
-        attackingPlayer: userAttacking,
+        // Don't include attackingPlayer - this is just a position update
       },
       websocketConnection,
       allConnections
