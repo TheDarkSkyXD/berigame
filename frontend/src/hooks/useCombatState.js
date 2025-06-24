@@ -9,15 +9,21 @@ export const useCombatState = (playerId) => {
   const {
     playerHealths,
     damageToRender,
+    optimisticDamage,
+    pendingVerifications,
     combatStates,
     deathStates,
     setPlayerHealth,
+    applyOptimisticDamage,
     applyDamageAndUpdateHealth,
+    rollbackOptimisticDamage,
     clearDamageDisplay,
     setCombatState,
     setDeathState,
     getPlayerHealth,
     getPlayerDamage,
+    getOptimisticDamage,
+    getPendingVerifications,
     getPlayerCombatState,
     getPlayerDeathState,
     cleanupExpiredStates,
@@ -54,9 +60,17 @@ export const useCombatState = (playerId) => {
     setPlayerHealth(playerId, newHealth, maxHealth);
   }, [playerId, setPlayerHealth]);
 
-  const applyDamage = useCallback((attackerId, damage, newHealth, maxHealth = 30) => {
-    applyDamageAndUpdateHealth(attackerId, playerId, damage, newHealth, maxHealth);
+  const applyDamage = useCallback((attackerId, damage, newHealth, maxHealth = 30, transactionId = null) => {
+    applyDamageAndUpdateHealth(attackerId, playerId, damage, newHealth, maxHealth, transactionId);
   }, [playerId, applyDamageAndUpdateHealth]);
+
+  const applyOptimistic = useCallback((attackerId, estimatedDamage = 2) => {
+    return applyOptimisticDamage(attackerId, playerId, estimatedDamage);
+  }, [playerId, applyOptimisticDamage]);
+
+  const rollbackOptimistic = useCallback((transactionId, reason) => {
+    rollbackOptimisticDamage(transactionId, reason);
+  }, [rollbackOptimisticDamage]);
 
   const updateCombatState = useCallback((inCombat, isAttacking = false) => {
     setCombatState(playerId, inCombat, isAttacking);
@@ -76,22 +90,27 @@ export const useCombatState = (playerId) => {
     maxHealth: health.max,
     damage: damage?.damage || null,
     damageTimestamp: damage?.timestamp || null,
+    optimisticDamage: getOptimisticDamage(playerId),
+    pendingVerifications: getPendingVerifications(),
     inCombat: combatState.inCombat,
     isAttacking: combatState.isAttacking,
     isDead: deathState.isDead,
     isRespawning: deathState.isRespawning,
-    
+
     // Actions
     updateHealth,
     applyDamage,
+    applyOptimistic,
+    rollbackOptimistic,
     updateCombatState,
     updateDeathState,
     clearDamage,
-    
+
     // Computed values
     isHealthy: health.current === health.max,
     healthPercentage: (health.current / health.max) * 100,
     timeSinceLastDamage: damage ? Date.now() - damage.timestamp : Infinity,
+    hasOptimisticDamage: !!getOptimisticDamage(playerId),
   };
 };
 

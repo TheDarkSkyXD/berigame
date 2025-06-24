@@ -802,6 +802,7 @@ exports.handler = async function (event, context) {
 
         // Server-side attack validation with database-backed cooldown
         const attackingPlayer = bodyAsJSON.message.attackingPlayer;
+        const optimisticTransactionId = bodyAsJSON.message.optimisticTransactionId;
         let damage = 0;
         if (attackingPlayer) {
           const currentTime = Date.now();
@@ -817,7 +818,8 @@ exports.handler = async function (event, context) {
               damage,
               cooldownRemaining: 0,
               attackAllowed: true,
-              attackType: 'hit'
+              attackType: 'hit',
+              optimisticTransactionId: optimisticTransactionId // Include transaction ID for verification
             };
 
             // Update attack time in database
@@ -831,17 +833,44 @@ exports.handler = async function (event, context) {
             }
 
             const timeSinceLastAttack = currentTime - cooldownCheck.lastAttackTime;
-            console.log(`⚔️ [${currentTime}] ${connectionId} → ${attackingPlayer}: ${damage} damage (gap: ${timeSinceLastAttack}ms)`);
+            console.log(`⚔️ [${currentTime}] ${connectionId} → ${attackingPlayer}: ${damage} damage (gap: ${timeSinceLastAttack}ms) ${optimisticTransactionId ? `(txn: ${optimisticTransactionId})` : ''}`);
+
+            // If this was an optimistic attack, log the confirmation (the damage message itself serves as confirmation)
+            if (optimisticTransactionId) {
+              console.log(`✅ Confirmed optimistic attack (txn: ${optimisticTransactionId}) - ${damage} damage`);
+            }
           } else {
             // Attack is on cooldown, don't process damage but include cooldown info
-            console.log(`🛡️ [${currentTime}] ${connectionId} attack blocked (cooldown: ${cooldownCheck.cooldownRemaining}ms remaining)`);
+            console.log(`🛡️ [${currentTime}] ${connectionId} attack blocked (cooldown: ${cooldownCheck.cooldownRemaining}ms remaining) ${optimisticTransactionId ? `(txn: ${optimisticTransactionId})` : ''}`);
             bodyAsJSON.message.damageGiven = {
               receivingPlayer: attackingPlayer,
               damage: 0,
               cooldownRemaining: cooldownCheck.cooldownRemaining,
               attackAllowed: false,
-              attackType: 'blocked'
+              attackType: 'blocked',
+              optimisticTransactionId: optimisticTransactionId // Include transaction ID for verification
             };
+
+            // If this was an optimistic attack that got blocked, send rejection message
+            if (optimisticTransactionId) {
+              const rejectionMessage = {
+                type: "optimisticAttackRejected",
+                transactionId: optimisticTransactionId,
+                reason: `Attack blocked - cooldown remaining: ${cooldownCheck.cooldownRemaining}ms`,
+                timestamp: currentTime
+              };
+
+              // Send rejection only to the attacking player
+              try {
+                await apigatewaymanagementapi.postToConnection({
+                  ConnectionId: connectionId,
+                  Data: JSON.stringify(rejectionMessage)
+                }).promise();
+                console.log(`❌ Sent optimistic attack rejection to ${connectionId} (txn: ${optimisticTransactionId})`);
+              } catch (error) {
+                console.error(`Failed to send optimistic attack rejection to ${connectionId}:`, error);
+              }
+            }
           }
         }
 

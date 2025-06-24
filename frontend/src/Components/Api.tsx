@@ -31,7 +31,8 @@ const Api = (props) => {
   // Combat store actions - replacing old damage and health management
   const {
     applyDamageAndUpdateHealth,
-    setPlayerHealth
+    setPlayerHealth,
+    rollbackOptimisticDamage
   } = useCombatStore();
   const setUserConnectionId = useUserStateStore(
     (state: any) => state.setUserConnectionId
@@ -133,25 +134,39 @@ const Api = (props) => {
           const damage = damageInfo.damage;
           const newHealth = damageInfo.newHealth;
 
+          // Check if this is a verification response for an optimistic attack
+          const transactionId = damageInfo.optimisticTransactionId;
+
           // Process damage display based on attack type using unified combat store
           if (damageInfo.attackType === 'hit') {
             // Show damage numbers for successful hits (including 0 damage)
             console.log(`💥 Processing hit: ${damage} damage to ${targetId} (type: ${damageInfo.attackType})`);
             if (newHealth !== undefined) {
               // Apply damage and update health atomically to prevent race conditions
-              applyDamageAndUpdateHealth(attackerId, targetId, damage, newHealth);
+              // Include transaction ID for optimistic confirmation
+              applyDamageAndUpdateHealth(attackerId, targetId, damage, newHealth, 30, transactionId);
             }
           } else if (damageInfo.attackType === 'blocked') {
             // Show blocked attack feedback differently using combat store
             console.log(`🛡️ Processing blocked attack to ${targetId} (cooldown: ${damageInfo.remainingCooldown}ms)`);
             if (newHealth !== undefined) {
               // Apply blocked attack with special damage indicator
-              applyDamageAndUpdateHealth(attackerId, targetId, 'BLOCKED', newHealth);
+              // Include transaction ID for optimistic confirmation
+              applyDamageAndUpdateHealth(attackerId, targetId, 'BLOCKED', newHealth, 30, transactionId);
             }
           }
 
           console.log(`💥 Combat Store: Applied ${damageInfo.attackType} attack - ${damage} damage from ${attackerId} to ${targetId}, new health: ${newHealth}`);
         }
+      }
+
+      // Handle optimistic attack verification failures
+      if (messageObject.type === "optimisticAttackRejected") {
+        const transactionId = messageObject.transactionId;
+        const reason = messageObject.reason || "Server rejected attack";
+
+        console.log(`❌ Optimistic attack rejected (txn: ${transactionId}) - ${reason}`);
+        rollbackOptimisticDamage(transactionId, reason);
       }
 
       if (messageObject.connections) {

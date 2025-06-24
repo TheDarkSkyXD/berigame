@@ -31,6 +31,7 @@ interface PositionMessage {
   restPosition: string | Vector3;
   isWalking: boolean;
   attackingPlayer?: boolean;
+  optimisticTransactionId?: string;
 }
 
 interface DeathMessage {
@@ -65,6 +66,44 @@ export const webSocketSendUpdate = async (message: PositionMessage, ws: any, all
     console.error("webSocketSendMessage Error:", e);
     setTimeout(() => {
       webSocketSendUpdate(message, ws, allConnections);
+    }, 500);
+  }
+}
+
+// Optimistic attack function that applies damage immediately and sends to server
+export const webSocketSendOptimisticAttack = async (
+  message: PositionMessage,
+  ws: any,
+  allConnections: any[],
+  applyOptimisticDamage: (attackerId: string, targetId: string, estimatedDamage?: number) => string
+) => {
+  try {
+    // Apply optimistic damage immediately if this is an attack
+    let transactionId = null;
+    if (message.attackingPlayer) {
+      // Estimate damage (average of 0-3 range is 1.5, round to 2)
+      const estimatedDamage = 2;
+      transactionId = applyOptimisticDamage('self', message.attackingPlayer, estimatedDamage);
+      console.log(`⚡ Optimistic attack: ${estimatedDamage} damage to ${message.attackingPlayer} (txn: ${transactionId})`);
+    }
+
+    // Add transaction ID to message for server verification
+    const enhancedMessage = {
+      ...message,
+      optimisticTransactionId: transactionId,
+    };
+
+    const payload = {
+      message: enhancedMessage,
+      connections: allConnections,
+      chatRoomId: "CHATROOM#913a9780-ff43-11eb-aa45-277d189232f4",
+      action: "sendUpdate",
+    }
+    ws?.send(JSON.stringify(payload));
+  } catch (e) {
+    console.error("webSocketSendOptimisticAttack Error:", e);
+    setTimeout(() => {
+      webSocketSendOptimisticAttack(message, ws, allConnections, applyOptimisticDamage);
     }, 500);
   }
 }

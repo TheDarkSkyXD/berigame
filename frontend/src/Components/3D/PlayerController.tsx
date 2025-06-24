@@ -310,6 +310,26 @@ const PlayerController = (props) => {
         setLastAttackAnimationTime(currentTime);
         playAnimation('attack');
         console.log(`🎬 Playing attack animation (cooldown: ${timeSinceLastAttack}ms)`);
+
+        // Apply optimistic damage only when attack animation actually starts
+        if (userAttacking && combatState.applyOptimistic) {
+          const transactionId = combatState.applyOptimistic(userConnectionId, 2);
+          console.log(`⚡ Applied optimistic damage on attack animation (txn: ${transactionId})`);
+
+          // Send attack message with transaction ID immediately
+          webSocketSendUpdate(
+            {
+              position: objRef.current.position,
+              restPosition: objRef.current.position,
+              rotation: obj.rotation,
+              isWalking: false,
+              attackingPlayer: userAttacking,
+              optimisticTransactionId: transactionId,
+            },
+            websocketConnection,
+            allConnections
+          );
+        }
       } else {
         // Still in cooldown, stay in idle
         playAnimation('idle');
