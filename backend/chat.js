@@ -816,7 +816,8 @@ exports.handler = async function (event, context) {
               receivingPlayer: attackingPlayer,
               damage,
               cooldownRemaining: 0,
-              attackAllowed: true
+              attackAllowed: true,
+              attackType: 'hit'
             };
 
             // Update attack time in database
@@ -838,7 +839,8 @@ exports.handler = async function (event, context) {
               receivingPlayer: attackingPlayer,
               damage: 0,
               cooldownRemaining: cooldownCheck.cooldownRemaining,
-              attackAllowed: false
+              attackAllowed: false,
+              attackType: 'blocked'
             };
           }
         }

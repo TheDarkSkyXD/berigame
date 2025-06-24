@@ -10,6 +10,7 @@ import {
   useWebsocketStore,
   useLoadingStore,
 } from "../../store";
+import { useOwnPlayerCombatState } from "../../hooks/useCombatState";
 import { webSocketSendUpdate } from "../../Api";
 import { RawShaderMaterial, Vector3, cloneUniformsGroups } from "three";
 import HealthBar from "./HealthBar";
@@ -40,23 +41,15 @@ const PlayerController = (props) => {
   const userConnectionId = useUserStateStore(
     (state: any) => state.userConnectionId
   );
-  const isDead = useUserStateStore((state: any) => state.isDead);
-  const isRespawning = useUserStateStore((state: any) => state.isRespawning);
-  const health = useUserStateStore((state: any) => state.health);
-  const setHealth = useUserStateStore((state: any) => state.setHealth);
-  const setIsDead = useUserStateStore((state: any) => state.setIsDead);
+  // Use unified combat state for own player
+  const combatState = useOwnPlayerCombatState(userConnectionId);
+
   const setPosition = useUserStateStore((state: any) => state.setPosition);
   const positionCorrection = useUserStateStore((state: any) => state.positionCorrection);
   const clearPositionCorrection = useUserStateStore((state: any) => state.clearPositionCorrection);
   const justSentMessage = useChatStore((state) => state.justSentMessage);
-  const damageToRender = useOtherUsersStore((state) => state.damageToRender);
-  const removeDamageToRender = useOtherUsersStore(
-    (state) => state.removeDamageToRender
-  );
 
-  const [localHealth, setLocalHealth] = useState(30);
   const [isPlayingDeathAnimation, setIsPlayingDeathAnimation] = useState(false);
-  const [currentDamage, setCurrentDamage] = useState<any>(null);
 
   // Attack animation timing - matches backend cooldown
   const [lastAttackAnimationTime, setLastAttackAnimationTime] = useState(Date.now() - 1000); // Initialize to allow immediate first attack
@@ -154,31 +147,16 @@ const PlayerController = (props) => {
     return () => clearTimeout(timeoutId);
   }, [currentDamage]);
 
+  // Handle death state changes
   useEffect(() => {
-    // Set damage to render variables for own player
-    const userDamage = damageToRender[userConnectionId];
-    if (userDamage !== null && userDamage !== undefined) {
-      console.log(`💥 Setting damage counter for own player: ${userDamage}`);
-      // Only set the damage number, let backend health update handle the actual health value
-      setCurrentDamage({ val: userDamage, timestamp: Date.now() });
-      removeDamageToRender(userConnectionId);
-    }
-  }, [damageToRender]);
-
-
-
-  // Sync local health with global health state (updated by backend)
-  useEffect(() => {
-    console.log(`❤️ Own player health updated: ${localHealth} -> ${health}`);
-    setLocalHealth(health);
-
-    // Check for death when health changes
-    if (health <= 0 && !isDead) {
-      console.log("Player health reached 0, triggering death state");
-      setIsDead(true);
+    if (combatState.isDead && !isPlayingDeathAnimation) {
+      console.log("Player health reached 0, triggering death animation");
       setIsPlayingDeathAnimation(true);
+    } else if (!combatState.isDead && isPlayingDeathAnimation) {
+      console.log("Player respawned, stopping death animation");
+      setIsPlayingDeathAnimation(false);
     }
-  }, [health]);
+  }, [combatState.isDead, isPlayingDeathAnimation]);
 
   // Handle death state changes
   useEffect(() => {
@@ -485,30 +463,30 @@ const PlayerController = (props) => {
       <>
         <HealthBar
           playerPosition={obj.position}
-          health={Math.max(0, localHealth)}
-          maxHealth={30}
+          health={Math.max(0, combatState.health)}
+          maxHealth={combatState.maxHealth}
           yOffset={2.5}
           isOwnPlayer={true}
         />
-        {currentDamage && (
+        {combatState.damage !== null && (
           <>
-            {console.log(`💥 Rendering damage component for own player: ${currentDamage.val} at ${currentDamage.timestamp}`)}
+            {console.log(`💥 Rendering damage component for own player: ${combatState.damage} at ${combatState.damageTimestamp}`)}
             <DamageNumber
-              key={currentDamage.timestamp}
+              key={combatState.damageTimestamp}
               playerPosition={obj.position}
               yOffset={1.5}
-              damageToRender={currentDamage.val}
+              damageToRender={combatState.damage}
             />
           </>
         )}
-        {isDead && (
+        {combatState.isDead && (
           <ChatBubble
             playerPosition={obj.position}
             yOffset={3}
             chatMessage="💀 DEAD - Respawning..."
           />
         )}
-        {isRespawning && (
+        {combatState.isRespawning && (
           <ChatBubble
             playerPosition={obj.position}
             yOffset={3}
