@@ -32,6 +32,7 @@ interface PositionMessage {
   isWalking: boolean;
   attackingPlayer?: boolean;
   optimisticTransactionId?: string;
+  inAttackCooldown?: boolean;
 }
 
 interface DeathMessage {

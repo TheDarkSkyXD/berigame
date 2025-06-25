@@ -29,6 +29,7 @@ const RenderOtherUser = ({
   isCombatable = false,
   inCombat = false,
   isAttacking = false,
+  inAttackCooldown = false,
   connectionId = "NPC",
 }) => {
   const { scene, animations, materials } = useGLTF(url);
@@ -125,6 +126,10 @@ const RenderOtherUser = ({
   useEffect(() => {
     if (isAttacking) {
       playAnimation('attack');
+    } else if (inAttackCooldown) {
+      // Player is in attack cooldown, force idle animation
+      console.log(`🎭 Other player ${connectionId} in attack cooldown, playing idle`);
+      playAnimation('idle');
     } else {
       // When not attacking anymore, return to appropriate state
       if (currentAnimationState === 'attack') {
@@ -135,7 +140,7 @@ const RenderOtherUser = ({
         }
       }
     }
-  }, [isAttacking, isWalking]);
+  }, [isAttacking, inAttackCooldown, isWalking]);
 
   useEffect(() => {
     if (!isWalking)
