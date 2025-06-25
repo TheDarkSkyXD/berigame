@@ -30,6 +30,7 @@ const RenderOtherUser = ({
   inCombat = false,
   isAttacking = false,
   inAttackCooldown = false,
+  animationState = null, // New unified animation state
   connectionId = "NPC",
 }) => {
   const { scene, animations, materials } = useGLTF(url);
@@ -53,6 +54,20 @@ const RenderOtherUser = ({
   // Animation state management for other players
   const [currentAnimationState, setCurrentAnimationState] = useState('idle');
   const [attackAnimationTimeout, setAttackAnimationTimeout] = useState(null);
+
+  // Helper function to determine the desired animation state
+  const getDesiredAnimationState = () => {
+    // Use new unified animation state if available
+    if (animationState) {
+      return animationState === 'attack_cooldown' ? 'idle' : animationState;
+    }
+
+    // Fallback to legacy logic for backward compatibility
+    if (isAttacking) return 'attack';
+    if (inAttackCooldown) return 'idle';
+    if (isWalking) return 'walk';
+    return 'idle';
+  };
 
   // Centralized animation control function for other players
   const playAnimation = (newState) => {
@@ -122,25 +137,15 @@ const RenderOtherUser = ({
     }
   }, [combatState.isDead, combatState.health, connectionId]);
 
-  // Handle attack animation changes
+  // Handle animation state changes - simplified with unified state
   useEffect(() => {
-    if (isAttacking) {
-      playAnimation('attack');
-    } else if (inAttackCooldown) {
-      // Player is in attack cooldown, force idle animation
-      console.log(`🎭 Other player ${connectionId} in attack cooldown, playing idle`);
-      playAnimation('idle');
-    } else {
-      // When not attacking anymore, return to appropriate state
-      if (currentAnimationState === 'attack') {
-        if (isWalking) {
-          playAnimation('walk');
-        } else {
-          playAnimation('idle');
-        }
-      }
+    const desiredState = getDesiredAnimationState();
+
+    if (desiredState !== currentAnimationState) {
+      console.log(`🎭 Other player ${connectionId} animation change: ${currentAnimationState} -> ${desiredState}`);
+      playAnimation(desiredState);
     }
-  }, [isAttacking, inAttackCooldown, isWalking]);
+  }, [animationState, isAttacking, inAttackCooldown, isWalking, connectionId]);
 
   useEffect(() => {
     if (!isWalking)

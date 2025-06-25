@@ -24,15 +24,19 @@ let clientConnectionId = null;
 //   }
 // }
 
+type AnimationState = 'idle' | 'walk' | 'attack' | 'attack_cooldown' | 'death';
+
 interface PositionMessage {
   // userId: string | number;
   position: string | number;
   rotation: string | number;
   restPosition: string | Vector3;
-  isWalking: boolean;
+  animationState?: AnimationState;
+  // Legacy fields - keeping for backward compatibility during transition
+  isWalking?: boolean;
   attackingPlayer?: boolean;
-  optimisticTransactionId?: string;
   inAttackCooldown?: boolean;
+  optimisticTransactionId?: string;
 }
 
 interface DeathMessage {

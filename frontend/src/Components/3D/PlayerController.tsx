@@ -187,8 +187,10 @@ const PlayerController = (props) => {
             position: objRef.current.position,
             restPosition: objRef.current.position,
             rotation: obj.rotation,
+            animationState: 'idle',
+            // Legacy fields for backward compatibility
             isWalking: false,
-            inAttackCooldown: false, // Clear cooldown flag on respawn
+            inAttackCooldown: false,
           },
           websocketConnection,
           allConnections
@@ -259,8 +261,10 @@ const PlayerController = (props) => {
         position: objRef.current.position,
         restPosition: pointOnLand,
         rotation: obj.rotation,
+        animationState: 'walk',
+        // Legacy fields for backward compatibility
         isWalking: true,
-        inAttackCooldown: false, // Clear cooldown flag when walking normally
+        inAttackCooldown: false,
         // Don't include attackingPlayer - this is just a position update
       },
       websocketConnection,
@@ -328,6 +332,8 @@ const PlayerController = (props) => {
               position: objRef.current.position,
               restPosition: objRef.current.position,
               rotation: obj.rotation,
+              animationState: 'attack',
+              // Legacy fields for backward compatibility
               isWalking: false,
               attackingPlayer: userAttacking, // Only include this for actual attacks
               optimisticTransactionId: transactionId,
@@ -347,8 +353,10 @@ const PlayerController = (props) => {
             position: objRef.current.position,
             restPosition: objRef.current.position,
             rotation: obj.rotation,
+            animationState: 'attack_cooldown',
+            // Legacy fields for backward compatibility
             isWalking: false,
-            inAttackCooldown: true, // Indicate this is a cooldown idle state
+            inAttackCooldown: true,
           },
           websocketConnection,
           allConnections
@@ -387,8 +395,10 @@ const PlayerController = (props) => {
             position: objRef.current.position,
             restPosition: objRef.current.position,
             rotation: obj.rotation,
+            animationState: 'walk',
+            // Legacy fields for backward compatibility
             isWalking: true,
-            inAttackCooldown: false, // Clear cooldown flag when walking normally
+            inAttackCooldown: false,
             // Don't include attackingPlayer - this is just a position update
           },
           websocketConnection,
@@ -418,8 +428,10 @@ const PlayerController = (props) => {
         position: objRef.current.position,
         restPosition: objRef.current.position,
         rotation: obj.rotation,
+        animationState: 'idle',
+        // Legacy fields for backward compatibility
         isWalking: false,
-        inAttackCooldown: false, // Clear cooldown flag in regular position updates
+        inAttackCooldown: false,
         // Don't include attackingPlayer - this is just a position update
       },
       websocketConnection,
@@ -472,8 +484,10 @@ const PlayerController = (props) => {
           position: objRef.current.position,
           restPosition: objRef.current.position,
           rotation: obj.rotation,
+          animationState: 'idle',
+          // Legacy fields for backward compatibility
           isWalking: false,
-          inAttackCooldown: false, // Clear cooldown flag on initialization
+          inAttackCooldown: false,
         },
         websocketConnection,
         allConnections
