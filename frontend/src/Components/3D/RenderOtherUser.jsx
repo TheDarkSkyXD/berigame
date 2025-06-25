@@ -36,6 +36,8 @@ const RenderOtherUser = ({
   const copiedScene = nodes.Scene;
   const { actions, mixer } = useAnimations(animations, copiedScene);
   const [currentTween, setCurrentTween] = useState(null);
+  const [currentAnimation, setCurrentAnimation] = useState("Idle");
+  const [animationLocked, setAnimationLocked] = useState(false);
   const objRef = useRef();
   const hitBox = new BoxGeometry(1, 5.5, 1);
   const hitBoxMaterial = new MeshBasicMaterial({ visible: false });
@@ -57,6 +59,27 @@ const RenderOtherUser = ({
   // Use centralized health if available, otherwise use local health
   const currentHealth = playerHealths[connectionId] !== undefined ? playerHealths[connectionId] : localHealth;
 
+  // Helper function to safely change animations
+  const changeAnimation = (newAnimation, force = false) => {
+    if (currentHealth <= 0 && !force) return; // Don't change animations if dead
+
+    if (currentAnimation !== newAnimation || force) {
+      console.log(`🎭 Other player ${connectionId} animation change: ${currentAnimation} -> ${newAnimation}`);
+
+      // Stop all animations first
+      Object.values(actions).forEach(action => action?.stop());
+
+      // Play the new animation
+      if (actions[newAnimation]) {
+        actions[newAnimation].play();
+        setCurrentAnimation(newAnimation);
+        console.log(`🎭 Other player ${connectionId} playing ${newAnimation} animation`);
+      }
+    } else {
+      console.log(`🔒 Other player ${connectionId} animation spam prevention: ${newAnimation}`);
+    }
+  };
+
   useEffect(() => {
     // Check expired damage number
     if (currentDamage?.timestamp < Date.now() - 1400) setCurrentDamage(null);
@@ -74,10 +97,9 @@ const RenderOtherUser = ({
       // Check for death (visual feedback only - backend handles the actual death logic)
       if (newHealth <= 0) {
         console.log(`Other player ${connectionId} appears to have died`);
-        // Stop animations for dead player
-        actions["Walk"]?.stop();
-        actions["RightHook"]?.stop();
-        actions["Idle"]?.stop();
+        // Stop all animations for dead player
+        Object.values(actions).forEach(action => action?.stop());
+        setCurrentAnimation("Dead");
       }
     }
   }, [damageToRender]);
@@ -88,16 +110,27 @@ const RenderOtherUser = ({
       setLocalHealth(playerHealths[connectionId]);
 
       // If player respawned (health restored), restart idle animation
-      if (playerHealths[connectionId] > 0) {
-        actions["Idle"]?.play();
+      if (playerHealths[connectionId] > 0 && currentAnimation === "Dead") {
+        console.log(`🎭 Other player ${connectionId} respawned, restarting idle animation`);
+        changeAnimation("Idle", true);
       }
     }
   }, [playerHealths[connectionId]]);
 
   useEffect(() => {
-    if (isAttacking) {
-      actions["Idle"]?.stop();
-      actions["RightHook"]?.play();
+    if (isAttacking && currentHealth > 0) {
+      console.log(`🎭 Other player ${connectionId} animation change: ${currentAnimation} -> attack`);
+      changeAnimation("RightHook");
+      setAnimationLocked(true);
+
+      // Auto-return to idle after attack animation
+      setTimeout(() => {
+        if (currentHealth > 0) {
+          console.log(`🎭 Other player ${connectionId} attack animation complete, returning to idle`);
+          changeAnimation("Idle");
+        }
+        setAnimationLocked(false);
+      }, 1000); // Adjust timing based on your attack animation length
     }
   }, [isAttacking]);
 
@@ -108,19 +141,24 @@ const RenderOtherUser = ({
 
   const isSameCoordinates = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   useEffect(() => {
+    if (currentHealth <= 0 || animationLocked) return; // Don't change animations if dead or locked
+
     const restPositionV3 = new Vector3(
       restPosition[0],
       restPosition[1],
       restPosition[2]
     );
+
     if (isWalking) {
       if (currentTween) TWEEN.remove(currentTween);
       if (isSameCoordinates(rotation, [0, 0, 0])) {
         copiedScene.lookAt(restPositionV3);
       }
       if (isSameCoordinates(objRef.current.position, restPositionV3)) return;
-      actions["Idle"]?.stop();
-      actions["Walk"]?.play();
+
+      console.log(`🎭 Other player ${connectionId} animation change: ${currentAnimation} -> walk`);
+      changeAnimation("Walk");
+
       setCurrentTween(
         new TWEEN.Tween(objRef.current.position)
           .to(
@@ -128,11 +166,17 @@ const RenderOtherUser = ({
             objRef.current.position.distanceTo(restPositionV3) * 500
           )
           .onComplete(() => {
-            actions["Walk"]?.stop();
-            actions["Idle"]?.play();
+            if (currentHealth > 0 && !animationLocked) {
+              console.log(`🎭 Other player ${connectionId} animation transition: walk -> idle`);
+              changeAnimation("Idle");
+            }
           })
           .start()
       );
+    } else if (currentAnimation === "Walk" && !animationLocked) {
+      // If we're not walking anymore but were walking, return to idle
+      console.log(`🎭 Other player ${connectionId} animation transition: walk -> idle`);
+      changeAnimation("Idle");
     }
   }, [isWalking, restPosition]);
 
@@ -140,9 +184,13 @@ const RenderOtherUser = ({
     TWEEN.update();
   });
 
+  // Initialize animation only once when component mounts
   useEffect(() => {
-    actions["Idle"]?.play();
-  }, [animations, mixer]);
+    if (actions["Idle"] && currentHealth > 0) {
+      console.log(`🎭 Other player ${connectionId} initializing with Idle animation`);
+      changeAnimation("Idle", true);
+    }
+  }, [actions["Idle"]]); // Only run when Idle action becomes available
 
   const materialChange = () => {
     for (const material of Object.keys(materials)) {
