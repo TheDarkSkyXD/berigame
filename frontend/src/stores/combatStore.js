@@ -157,15 +157,25 @@ export const useCombatStore = create((set, get) => ({
         },
       };
 
-      // Update target health
+      // Update target health - clear optimistic flags and set confirmed health
+      const currentHealth = state.playerHealths[targetId];
+      const wasOptimistic = currentHealth?.isOptimistic;
+
       const newHealths = {
         ...state.playerHealths,
         [targetId]: {
           current: Math.max(0, newHealth),
           max: maxHealth,
           lastUpdated: timestamp,
+          isOptimistic: false, // Clear optimistic flag
+          optimisticTransactionId: null, // Clear transaction ID
+          originalHealth: null, // Clear original health backup
         },
       };
+
+      if (wasOptimistic) {
+        console.log(`✅ Combat Store: Confirmed optimistic health update - ${targetId} health confirmed at: ${newHealth}`);
+      }
 
       // Update death state if health reaches 0
       const newDeathStates = { ...state.deathStates };
@@ -227,11 +237,30 @@ export const useCombatStore = create((set, get) => ({
         },
       };
 
-      // Don't update health yet - wait for server confirmation or correction
-      // The frontend will show the damage number but health bar remains unchanged until confirmed
+      // Apply optimistic health update for immediate visual feedback
+      const currentHealth = state.playerHealths[targetId];
+
+      // Initialize health if it doesn't exist (default to 30/30)
+      const healthToUse = currentHealth || { current: 30, max: 30, lastUpdated: timestamp };
+      const newOptimisticHealth = Math.max(0, healthToUse.current - damage);
+
+      const newHealths = {
+        ...state.playerHealths,
+        [targetId]: {
+          ...healthToUse,
+          current: newOptimisticHealth,
+          lastUpdated: timestamp,
+          isOptimistic: true, // Mark as optimistic for potential rollback
+          optimisticTransactionId: transactionId,
+          originalHealth: healthToUse.current, // Store original for rollback
+        },
+      };
+
+      console.log(`⚡ Combat Store: Optimistic health update - ${targetId} health: ${healthToUse.current} → ${newOptimisticHealth}`);
 
       return {
         damageToRender: newDamageToRender,
+        playerHealths: newHealths,
       };
     });
   },
@@ -255,9 +284,31 @@ export const useCombatStore = create((set, get) => ({
       delete newOptimisticDamage[playerId];
       delete newPendingVerifications[transactionId];
 
+      // Rollback optimistic health if it exists
+      const currentHealth = state.playerHealths[playerId];
+      const newHealths = { ...state.playerHealths };
+
+      if (currentHealth?.isOptimistic && currentHealth.optimisticTransactionId === transactionId) {
+        console.log(`🔄 Combat Store: Rolling back optimistic health for ${playerId} from ${currentHealth.current} to ${currentHealth.originalHealth}`);
+        newHealths[playerId] = {
+          ...currentHealth,
+          current: currentHealth.originalHealth, // Restore original health
+          isOptimistic: false,
+          optimisticTransactionId: null,
+          originalHealth: null,
+          lastUpdated: Date.now(),
+        };
+      }
+
+      // Clear damage display for rollbacks
+      const newDamageToRender = { ...state.damageToRender };
+      delete newDamageToRender[playerId];
+
       return {
         optimisticDamage: newOptimisticDamage,
         pendingVerifications: newPendingVerifications,
+        playerHealths: newHealths,
+        damageToRender: newDamageToRender,
       };
     });
   },

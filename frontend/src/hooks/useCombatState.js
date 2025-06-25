@@ -111,6 +111,8 @@ export const useCombatState = (playerId) => {
     healthPercentage: (health.current / health.max) * 100,
     timeSinceLastDamage: damage ? Date.now() - damage.timestamp : Infinity,
     hasOptimisticDamage: !!getOptimisticDamage(playerId),
+    isOptimisticHealth: health.isOptimistic || false,
+    originalHealth: health.originalHealth || null,
   };
 };
 
