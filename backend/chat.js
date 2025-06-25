@@ -597,6 +597,88 @@ exports.handler = async function (event, context) {
     }
   };
 
+  /**
+   * Calculate estimated damage for optimistic broadcasting
+   * Uses the same logic as the actual damage calculation
+   */
+  const calculateEstimatedDamage = () => {
+    // Same random damage calculation as the real one (0-3)
+    return Math.floor(Math.random() * 4);
+  };
+
+  /**
+   * Validate attack and calculate actual damage
+   * Returns validation result and actual damage
+   */
+  const validateAttackAndCalculateDamage = async (attackerId, targetId, chatRoomId, optimisticTransactionId) => {
+    try {
+      const currentTime = Date.now();
+
+      // Check attack cooldown from database
+      const cooldownCheck = await checkPlayerAttackCooldown(attackerId, chatRoomId);
+
+      if (cooldownCheck.canAttack) {
+        // Calculate actual damage (0-3)
+        const actualDamage = Math.floor(Math.random() * 4);
+
+        // Update attack time in database
+        await updatePlayerAttackTime(attackerId, chatRoomId, currentTime);
+
+        return {
+          valid: true,
+          damage: actualDamage,
+          cooldownRemaining: 0,
+          attackType: 'hit',
+          reason: null
+        };
+      } else {
+        return {
+          valid: false,
+          damage: 0,
+          cooldownRemaining: cooldownCheck.cooldownRemaining,
+          attackType: 'blocked',
+          reason: `Attack blocked - cooldown remaining: ${cooldownCheck.cooldownRemaining}ms`
+        };
+      }
+    } catch (error) {
+      console.error(`Error validating attack from ${attackerId} to ${targetId}:`, error);
+      return {
+        valid: false,
+        damage: 0,
+        cooldownRemaining: 0,
+        attackType: 'error',
+        reason: 'Server error during validation'
+      };
+    }
+  };
+
+  /**
+   * Send correction message to all players when validation differs from optimistic broadcast
+   */
+  const sendDamageCorrection = async (attackerId, targetId, chatRoomId, optimisticTransactionId, correctionData) => {
+    try {
+      const connections = await getCachedConnections(chatRoomId);
+
+      const correctionMessage = {
+        type: "damageCorrection",
+        attackerId,
+        targetId,
+        optimisticTransactionId,
+        correctedDamage: correctionData.actualDamage,
+        correctedHealth: correctionData.actualHealth,
+        attackType: correctionData.attackType,
+        reason: correctionData.reason,
+        timestamp: Date.now(),
+        chatRoomId
+      };
+
+      console.log(`🔄 Sending damage correction for txn ${optimisticTransactionId}: ${correctionData.reason}`);
+      await broadcastToConnections(connections, correctionMessage);
+    } catch (error) {
+      console.error(`Failed to send damage correction for txn ${optimisticTransactionId}:`, error);
+    }
+  };
+
   switch (routeKey) {
     case "$connect":
       break;
@@ -800,77 +882,35 @@ exports.handler = async function (event, context) {
         bodyAsJSON.message.serverValidated = true;
         bodyAsJSON.message.validationTimestamp = currentTimestamp;
 
-        // Server-side attack validation with database-backed cooldown
+        // OPTIMISTIC DAMAGE BROADCASTING - Broadcast immediately, validate later
         const attackingPlayer = bodyAsJSON.message.attackingPlayer;
         const optimisticTransactionId = bodyAsJSON.message.optimisticTransactionId;
-        let damage = 0;
+
         if (attackingPlayer) {
           const currentTime = Date.now();
 
-          // Check attack cooldown from database
-          const cooldownCheck = await checkPlayerAttackCooldown(connectionId, bodyAsJSON.chatRoomId);
+          // Calculate estimated damage for immediate broadcast
+          const estimatedDamage = calculateEstimatedDamage();
 
-          if (cooldownCheck.canAttack) {
-            // Allow 0 damage - random damage from 0 to 3
-            damage = Math.floor(Math.random() * 4);
-            bodyAsJSON.message.damageGiven = {
-              receivingPlayer: attackingPlayer,
-              damage,
-              cooldownRemaining: 0,
-              attackAllowed: true,
-              attackType: 'hit',
-              optimisticTransactionId: optimisticTransactionId // Include transaction ID for verification
-            };
+          console.log(`⚡ [${currentTime}] OPTIMISTIC: ${connectionId} → ${attackingPlayer}: ${estimatedDamage} estimated damage ${optimisticTransactionId ? `(txn: ${optimisticTransactionId})` : ''}`);
 
-            // Update attack time in database
-            await updatePlayerAttackTime(connectionId, bodyAsJSON.chatRoomId, currentTime);
+          // Add optimistic damage to message for immediate broadcast
+          bodyAsJSON.message.damageGiven = {
+            receivingPlayer: attackingPlayer,
+            damage: estimatedDamage,
+            cooldownRemaining: 0, // Optimistic assumption
+            attackAllowed: true, // Optimistic assumption
+            attackType: 'hit', // Optimistic assumption
+            optimisticTransactionId: optimisticTransactionId,
+            isOptimistic: true // Flag to indicate this is unvalidated
+          };
 
-            // Deal damage and get new health if damage > 0
-            if (damage > 0) {
-              const newHealth = await dealDamage(attackingPlayer, damage, bodyAsJSON.chatRoomId);
-              // Include the new health in the attack message to consolidate updates
-              bodyAsJSON.message.damageGiven.newHealth = newHealth;
-            }
-
-            const timeSinceLastAttack = currentTime - cooldownCheck.lastAttackTime;
-            console.log(`⚔️ [${currentTime}] ${connectionId} → ${attackingPlayer}: ${damage} damage (gap: ${timeSinceLastAttack}ms) ${optimisticTransactionId ? `(txn: ${optimisticTransactionId})` : ''}`);
-
-            // If this was an optimistic attack, log the confirmation (the damage message itself serves as confirmation)
-            if (optimisticTransactionId) {
-              console.log(`✅ Confirmed optimistic attack (txn: ${optimisticTransactionId}) - ${damage} damage`);
-            }
-          } else {
-            // Attack is on cooldown, don't process damage but include cooldown info
-            console.log(`🛡️ [${currentTime}] ${connectionId} attack blocked (cooldown: ${cooldownCheck.cooldownRemaining}ms remaining) ${optimisticTransactionId ? `(txn: ${optimisticTransactionId})` : ''}`);
-            bodyAsJSON.message.damageGiven = {
-              receivingPlayer: attackingPlayer,
-              damage: 0,
-              cooldownRemaining: cooldownCheck.cooldownRemaining,
-              attackAllowed: false,
-              attackType: 'blocked',
-              optimisticTransactionId: optimisticTransactionId // Include transaction ID for verification
-            };
-
-            // If this was an optimistic attack that got blocked, send rejection message
-            if (optimisticTransactionId) {
-              const rejectionMessage = {
-                type: "optimisticAttackRejected",
-                transactionId: optimisticTransactionId,
-                reason: `Attack blocked - cooldown remaining: ${cooldownCheck.cooldownRemaining}ms`,
-                timestamp: currentTime
-              };
-
-              // Send rejection only to the attacking player
-              try {
-                await apigatewaymanagementapi.postToConnection({
-                  ConnectionId: connectionId,
-                  Data: JSON.stringify(rejectionMessage)
-                }).promise();
-                console.log(`❌ Sent optimistic attack rejection to ${connectionId} (txn: ${optimisticTransactionId})`);
-              } catch (error) {
-                console.error(`Failed to send optimistic attack rejection to ${connectionId}:`, error);
-              }
-            }
+          // Estimate new health for immediate broadcast (assuming 30 max health)
+          // This will be corrected later if needed
+          if (estimatedDamage > 0) {
+            // We don't have the current health here, so we'll let the frontend handle the optimistic health update
+            // The correction will come later with the actual health
+            bodyAsJSON.message.damageGiven.estimatedHealthReduction = estimatedDamage;
           }
         }
 
@@ -890,6 +930,78 @@ exports.handler = async function (event, context) {
         await broadcastToConnections(connectionObjects, bodyAsJSON.message);
 
         const broadcastTime = Date.now() - broadcastStartTime;
+
+        // BACKGROUND VALIDATION - Validate attack after broadcasting
+        if (attackingPlayer && optimisticTransactionId) {
+          // Run validation in background (don't await to avoid blocking)
+          setImmediate(async () => {
+            try {
+              const validationStartTime = Date.now();
+
+              // Validate the attack and get actual damage
+              const validationResult = await validateAttackAndCalculateDamage(
+                connectionId,
+                attackingPlayer,
+                bodyAsJSON.chatRoomId,
+                optimisticTransactionId
+              );
+
+              const estimatedDamage = bodyAsJSON.message.damageGiven.damage;
+              const actualDamage = validationResult.damage;
+              let actualHealth = null;
+
+              // Apply actual damage if attack is valid
+              if (validationResult.valid && actualDamage > 0) {
+                actualHealth = await dealDamage(attackingPlayer, actualDamage, bodyAsJSON.chatRoomId);
+              }
+
+              const validationTime = Date.now() - validationStartTime;
+
+              // Check if correction is needed
+              const needsCorrection = !validationResult.valid ||
+                                    estimatedDamage !== actualDamage ||
+                                    validationResult.attackType !== 'hit';
+
+              if (needsCorrection) {
+                console.log(`🔄 [${Date.now()}] CORRECTION NEEDED for txn ${optimisticTransactionId}: estimated=${estimatedDamage}, actual=${actualDamage}, valid=${validationResult.valid}`);
+
+                // Send correction to all players
+                await sendDamageCorrection(
+                  connectionId,
+                  attackingPlayer,
+                  bodyAsJSON.chatRoomId,
+                  optimisticTransactionId,
+                  {
+                    actualDamage,
+                    actualHealth,
+                    attackType: validationResult.attackType,
+                    reason: validationResult.reason || `Damage corrected from ${estimatedDamage} to ${actualDamage}`
+                  }
+                );
+              } else {
+                console.log(`✅ [${Date.now()}] VALIDATION CONFIRMED for txn ${optimisticTransactionId}: ${actualDamage} damage (${validationTime}ms)`);
+              }
+
+            } catch (error) {
+              console.error(`❌ Background validation failed for txn ${optimisticTransactionId}:`, error);
+
+              // Send error correction
+              await sendDamageCorrection(
+                connectionId,
+                attackingPlayer,
+                bodyAsJSON.chatRoomId,
+                optimisticTransactionId,
+                {
+                  actualDamage: 0,
+                  actualHealth: null,
+                  attackType: 'error',
+                  reason: 'Server validation error'
+                }
+              );
+            }
+          });
+        }
+
         const totalTime = Date.now() - caseStartTime;
 
         if (broadcastTime > 100 || totalTime > 200) {

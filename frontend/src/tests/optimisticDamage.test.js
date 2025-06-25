@@ -273,4 +273,70 @@ describe('Optimistic Damage System', () => {
       expect(store.getPendingVerifications()[transactionId]).toBeDefined();
     });
   });
+
+  describe('Server Optimistic Damage', () => {
+    test('should apply server optimistic damage immediately', () => {
+      const attackerId = 'attacker1';
+      const targetId = 'target1';
+      const damage = 3;
+      const transactionId = 'server-txn-123';
+
+      // Apply server optimistic damage
+      store.applyServerOptimisticDamage(attackerId, targetId, damage, transactionId);
+
+      // Check damage is displayed immediately
+      const damageToRender = store.getPlayerDamage(targetId);
+      expect(damageToRender).toBeDefined();
+      expect(damageToRender.damage).toBe(damage);
+      expect(damageToRender.isOptimistic).toBe(true);
+      expect(damageToRender.transactionId).toBe(transactionId);
+      expect(damageToRender.attackerId).toBe(attackerId);
+    });
+
+    test('should not update health for server optimistic damage', () => {
+      const attackerId = 'attacker1';
+      const targetId = 'target1';
+      const damage = 3;
+      const transactionId = 'server-txn-123';
+
+      // Set initial health
+      store.setPlayerHealth(targetId, 20);
+      const initialHealth = store.getPlayerHealth(targetId);
+
+      // Apply server optimistic damage
+      store.applyServerOptimisticDamage(attackerId, targetId, damage, transactionId);
+
+      // Health should remain unchanged
+      const currentHealth = store.getPlayerHealth(targetId);
+      expect(currentHealth.current).toBe(initialHealth.current);
+    });
+
+    test('should confirm server optimistic damage with health update', () => {
+      const attackerId = 'attacker1';
+      const targetId = 'target1';
+      const optimisticDamage = 2;
+      const actualDamage = 3;
+      const newHealth = 17;
+      const transactionId = 'server-txn-123';
+
+      // Apply server optimistic damage
+      store.applyServerOptimisticDamage(attackerId, targetId, optimisticDamage, transactionId);
+
+      // Verify optimistic damage is shown
+      expect(store.getPlayerDamage(targetId).isOptimistic).toBe(true);
+
+      // Confirm with actual damage and health
+      store.applyDamageAndUpdateHealth(attackerId, targetId, actualDamage, newHealth, 30, transactionId);
+
+      // Check damage is updated and confirmed
+      const damage = store.getPlayerDamage(targetId);
+      expect(damage.damage).toBe(actualDamage);
+      expect(damage.isConfirmed).toBe(true);
+      expect(damage.isOptimistic).toBeUndefined();
+
+      // Check health is updated
+      const health = store.getPlayerHealth(targetId);
+      expect(health.current).toBe(newHealth);
+    });
+  });
 });

@@ -31,6 +31,7 @@ const Api = (props) => {
   // Combat store actions - replacing old damage and health management
   const {
     applyDamageAndUpdateHealth,
+    applyServerOptimisticDamage,
     setPlayerHealth,
     rollbackOptimisticDamage
   } = useCombatStore();
@@ -138,9 +139,13 @@ const Api = (props) => {
           const transactionId = damageInfo.optimisticTransactionId;
 
           // Process damage display based on attack type using unified combat store
-          if (damageInfo.attackType === 'hit') {
+          if (damageInfo.isOptimistic) {
+            // This is an optimistic broadcast from server - show damage but don't update health yet
+            console.log(`⚡ Processing optimistic damage: ${damage} damage to ${targetId} (txn: ${transactionId})`);
+            applyServerOptimisticDamage(attackerId, targetId, damage, transactionId);
+          } else if (damageInfo.attackType === 'hit') {
             // Show damage numbers for successful hits (including 0 damage)
-            console.log(`💥 Processing hit: ${damage} damage to ${targetId} (type: ${damageInfo.attackType})`);
+            console.log(`💥 Processing confirmed hit: ${damage} damage to ${targetId} (type: ${damageInfo.attackType})`);
             if (newHealth !== undefined) {
               // Apply damage and update health atomically to prevent race conditions
               // Include transaction ID for optimistic confirmation
@@ -167,6 +172,31 @@ const Api = (props) => {
 
         console.log(`❌ Optimistic attack rejected (txn: ${transactionId}) - ${reason}`);
         rollbackOptimisticDamage(transactionId, reason);
+      }
+
+      // Handle damage corrections from server validation
+      if (messageObject.type === "damageCorrection") {
+        const {
+          attackerId,
+          targetId,
+          optimisticTransactionId,
+          correctedDamage,
+          correctedHealth,
+          attackType,
+          reason
+        } = messageObject;
+
+        console.log(`🔄 Damage correction received (txn: ${optimisticTransactionId}): ${reason}`);
+
+        if (attackType === 'blocked' || attackType === 'error') {
+          // Attack was invalid - rollback optimistic damage
+          console.log(`❌ Rolling back invalid attack (txn: ${optimisticTransactionId}) - ${reason}`);
+          rollbackOptimisticDamage(optimisticTransactionId, reason);
+        } else {
+          // Attack was valid but damage amount was different - apply correction
+          console.log(`🔄 Correcting damage amount (txn: ${optimisticTransactionId}): ${correctedDamage} damage, health: ${correctedHealth}`);
+          applyDamageAndUpdateHealth(attackerId, targetId, correctedDamage, correctedHealth, 30, optimisticTransactionId);
+        }
       }
 
       if (messageObject.connections) {
