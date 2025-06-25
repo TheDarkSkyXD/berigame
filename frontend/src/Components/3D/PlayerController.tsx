@@ -187,10 +187,7 @@ const PlayerController = (props) => {
             position: objRef.current.position,
             restPosition: objRef.current.position,
             rotation: obj.rotation,
-            animationState: 'idle',
-            // Legacy fields for backward compatibility
             isWalking: false,
-            inAttackCooldown: false,
           },
           websocketConnection,
           allConnections
@@ -261,10 +258,7 @@ const PlayerController = (props) => {
         position: objRef.current.position,
         restPosition: pointOnLand,
         rotation: obj.rotation,
-        animationState: 'walk',
-        // Legacy fields for backward compatibility
         isWalking: true,
-        inAttackCooldown: false,
         // Don't include attackingPlayer - this is just a position update
       },
       websocketConnection,
@@ -332,8 +326,6 @@ const PlayerController = (props) => {
               position: objRef.current.position,
               restPosition: objRef.current.position,
               rotation: obj.rotation,
-              animationState: 'attack',
-              // Legacy fields for backward compatibility
               isWalking: false,
               attackingPlayer: userAttacking, // Only include this for actual attacks
               optimisticTransactionId: transactionId,
@@ -343,24 +335,9 @@ const PlayerController = (props) => {
           );
         }
       } else {
-        // Still in cooldown, stay in idle and notify other players
+        // Still in cooldown, stay in idle
         playAnimation('idle');
         console.log(`⏳ Attack on cooldown (${ATTACK_COOLDOWN_MS - timeSinceLastAttack}ms remaining)`);
-
-        // Send cooldown idle state to other players so they can see the idle animation
-        webSocketSendUpdate(
-          {
-            position: objRef.current.position,
-            restPosition: objRef.current.position,
-            rotation: obj.rotation,
-            animationState: 'attack_cooldown',
-            // Legacy fields for backward compatibility
-            isWalking: false,
-            inAttackCooldown: true,
-          },
-          websocketConnection,
-          allConnections
-        );
       }
     } else {
       // Not in range or not attacking
@@ -395,10 +372,7 @@ const PlayerController = (props) => {
             position: objRef.current.position,
             restPosition: objRef.current.position,
             rotation: obj.rotation,
-            animationState: 'walk',
-            // Legacy fields for backward compatibility
             isWalking: true,
-            inAttackCooldown: false,
             // Don't include attackingPlayer - this is just a position update
           },
           websocketConnection,
@@ -428,10 +402,7 @@ const PlayerController = (props) => {
         position: objRef.current.position,
         restPosition: objRef.current.position,
         rotation: obj.rotation,
-        animationState: 'idle',
-        // Legacy fields for backward compatibility
         isWalking: false,
-        inAttackCooldown: false,
         // Don't include attackingPlayer - this is just a position update
       },
       websocketConnection,
@@ -484,10 +455,7 @@ const PlayerController = (props) => {
           position: objRef.current.position,
           restPosition: objRef.current.position,
           rotation: obj.rotation,
-          animationState: 'idle',
-          // Legacy fields for backward compatibility
           isWalking: false,
-          inAttackCooldown: false,
         },
         websocketConnection,
         allConnections

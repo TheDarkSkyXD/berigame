@@ -39,17 +39,14 @@ const RenderOnlineUsers = (props) => {
         return (
           <group key={playerKey}>
             <RenderOtherUser
-              animationState={currentPlayer.animationState}
-              // Legacy props for backward compatibility
               isAttacking={currentPlayer.attackingPlayer}
-              inAttackCooldown={currentPlayer.inAttackCooldown}
-              isWalking={currentPlayer.isWalking}
               connectionId={playerKey}
               isCombatable={true}
               messagesToRender={messagesToRender[playerKey]?.message}
               position={[x, y, z]}
               rotation={[_x, _y, _z]}
               restPosition={[rX, rY, rZ]}
+              isWalking={currentPlayer.isWalking}
             />
           </group>
         );
