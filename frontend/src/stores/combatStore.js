@@ -206,6 +206,36 @@ export const useCombatStore = create((set, get) => ({
     });
   },
 
+  // Apply optimistic damage from server broadcast (different from client-side optimistic)
+  applyServerOptimisticDamage: (attackerId, targetId, damage, transactionId = null) => {
+    set((state) => {
+      const timestamp = Date.now();
+      const damageId = `${attackerId}-${targetId}-${timestamp}`;
+
+      console.log(`⚡ Combat Store: Applying server optimistic damage ${damage} from ${attackerId} to ${targetId}${transactionId ? ` (txn: ${transactionId})` : ''}`);
+
+      // Add damage to render immediately
+      const newDamageToRender = {
+        ...state.damageToRender,
+        [targetId]: {
+          damage,
+          timestamp,
+          id: damageId,
+          attackerId,
+          isOptimistic: true, // Mark as optimistic for potential correction
+          transactionId,
+        },
+      };
+
+      // Don't update health yet - wait for server confirmation or correction
+      // The frontend will show the damage number but health bar remains unchanged until confirmed
+
+      return {
+        damageToRender: newDamageToRender,
+      };
+    });
+  },
+
   // Rollback optimistic damage when server rejects
   rollbackOptimisticDamage: (transactionId, reason = 'Server rejected') => {
     set((state) => {
