@@ -4,8 +4,8 @@
  * Provides backend-specific inventory operations and integrates with DynamoDB
  */
 
-const { InventoryManager } = require('../shared/inventoryOperations.js');
-const { getItemDefinition, getLegacyBerryItemId } = require('../shared/itemDefinitions.js');
+const { InventoryManager } = require('./shared/inventoryOperations.js');
+const { getItemDefinition, getLegacyBerryItemId } = require('./shared/itemDefinitions.js');
 
 /**
  * Get player's inventory from database data
