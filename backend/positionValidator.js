@@ -330,17 +330,15 @@ class PositionValidator {
         PK: chatRoomId,
         SK: "CONNECTION#" + connectionId
       },
-      UpdateExpression: `SET 
+      UpdateExpression: `SET
         lastValidPosition = :pos,
         lastPositionUpdate = :timestamp,
-        positionHistory = :history,
         violationCount = :zero,
         lastViolationTime = :zero,
         updateCount = :zero`,
       ExpressionAttributeValues: {
         ":pos": position,
         ":timestamp": timestamp,
-        ":history": [{ position, timestamp }],
         ":zero": 0
       }
     };
@@ -354,18 +352,6 @@ class PositionValidator {
    * Update player position in database (optimized to avoid extra DB call)
    */
   async updatePlayerPosition(connectionId, chatRoomId, position, timestamp, existingPlayerState = null) {
-    // Use existing player state if provided to avoid extra DB call
-    const playerState = existingPlayerState || await this.getPlayerState(connectionId, chatRoomId);
-    const positionHistory = playerState?.positionHistory || [];
-
-    // Add new position to history
-    positionHistory.push({ position, timestamp });
-
-    // Keep only last 5 position history entries (reduced from 10 for performance)
-    if (positionHistory.length > 5) {
-      positionHistory.shift();
-    }
-
     const params = {
       TableName: this.tableName,
       Key: {
@@ -375,12 +361,10 @@ class PositionValidator {
       UpdateExpression: `SET
         lastValidPosition = :pos,
         lastPositionUpdate = :timestamp,
-        positionHistory = :history,
         updateCount = updateCount + :one`,
       ExpressionAttributeValues: {
         ":pos": position,
         ":timestamp": timestamp,
-        ":history": positionHistory,
         ":one": 1
       }
     };
