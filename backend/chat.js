@@ -597,18 +597,48 @@ exports.handler = async function (event, context) {
     }
   };
 
+  // Store for optimistic damage values to ensure consistency between optimistic and validated damage
+  const optimisticDamageStore = new Map();
+
   /**
-   * Calculate estimated damage for optimistic broadcasting
-   * Uses the same logic as the actual damage calculation
+   * Generate damage value and store it for later validation
+   * This ensures the same damage value is used for both optimistic and validated phases
    */
-  const calculateEstimatedDamage = () => {
-    // Same random damage calculation as the real one (0-3)
+  const generateAndStoreDamage = (transactionId) => {
+    // Generate damage (0-3)
+    const damage = Math.floor(Math.random() * 4);
+
+    // Store with TTL to prevent memory leaks (cleanup after 30 seconds)
+    optimisticDamageStore.set(transactionId, {
+      damage,
+      timestamp: Date.now()
+    });
+
+    // Schedule cleanup after 30 seconds
+    setTimeout(() => {
+      optimisticDamageStore.delete(transactionId);
+    }, 30000);
+
+    return damage;
+  };
+
+  /**
+   * Get stored damage value for validation, or generate new one if not found
+   */
+  const getStoredDamage = (transactionId) => {
+    const stored = optimisticDamageStore.get(transactionId);
+    if (stored) {
+      // Clean up after retrieval since we only need it once
+      optimisticDamageStore.delete(transactionId);
+      return stored.damage;
+    }
+    // Fallback: generate new damage if not found (shouldn't happen in normal flow)
     return Math.floor(Math.random() * 4);
   };
 
   /**
-   * Validate attack and calculate actual damage
-   * Returns validation result and actual damage
+   * Validate attack using pre-generated damage value
+   * Returns validation result with the same damage used in optimistic broadcast
    */
   const validateAttackAndCalculateDamage = async (attackerId, targetId, chatRoomId, optimisticTransactionId) => {
     try {
@@ -618,8 +648,8 @@ exports.handler = async function (event, context) {
       const cooldownCheck = await checkPlayerAttackCooldown(attackerId, chatRoomId);
 
       if (cooldownCheck.canAttack) {
-        // Calculate actual damage (0-3)
-        const actualDamage = Math.floor(Math.random() * 4);
+        // Use the same damage value that was broadcast optimistically
+        const actualDamage = getStoredDamage(optimisticTransactionId);
 
         // Update attack time in database
         await updatePlayerAttackTime(attackerId, chatRoomId, currentTime);
@@ -632,6 +662,9 @@ exports.handler = async function (event, context) {
           reason: null
         };
       } else {
+        // Clean up stored damage since attack is invalid
+        optimisticDamageStore.delete(optimisticTransactionId);
+
         return {
           valid: false,
           damage: 0,
@@ -642,6 +675,9 @@ exports.handler = async function (event, context) {
       }
     } catch (error) {
       console.error(`Error validating attack from ${attackerId} to ${targetId}:`, error);
+      // Clean up stored damage on error
+      optimisticDamageStore.delete(optimisticTransactionId);
+
       return {
         valid: false,
         damage: 0,
@@ -888,10 +924,10 @@ exports.handler = async function (event, context) {
         if (attackingPlayer) {
           const currentTime = Date.now();
 
-          // Calculate estimated damage for immediate broadcast
-          const estimatedDamage = calculateEstimatedDamage();
+          // Generate and store damage for consistent optimistic/validated flow
+          const estimatedDamage = generateAndStoreDamage(optimisticTransactionId);
 
-          console.log(`⚡ [${currentTime}] OPTIMISTIC: ${connectionId} → ${attackingPlayer}: ${estimatedDamage} estimated damage ${optimisticTransactionId ? `(txn: ${optimisticTransactionId})` : ''}`);
+          console.log(`⚡ [${currentTime}] OPTIMISTIC: ${connectionId} → ${attackingPlayer}: ${estimatedDamage} damage (stored for validation) ${optimisticTransactionId ? `(txn: ${optimisticTransactionId})` : ''}`);
 
           // Add optimistic damage to message for immediate broadcast
           bodyAsJSON.message.damageGiven = {

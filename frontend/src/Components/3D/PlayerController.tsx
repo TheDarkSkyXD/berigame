@@ -11,6 +11,7 @@ import {
   useLoadingStore,
 } from "../../store";
 import { useOwnPlayerCombatState } from "../../hooks/useCombatState";
+import { useCombatStore } from "../../stores/combatStore";
 import { webSocketSendUpdate } from "../../Api";
 import { RawShaderMaterial, Vector3, cloneUniformsGroups } from "three";
 import HealthBar from "./HealthBar";
@@ -312,8 +313,11 @@ const PlayerController = (props) => {
         console.log(`🎬 Playing attack animation (cooldown: ${timeSinceLastAttack}ms)`);
 
         // Apply optimistic damage only when attack animation actually starts
-        if (userAttacking && combatState.applyOptimistic) {
-          const transactionId = combatState.applyOptimistic(userConnectionId, 2);
+        if (userAttacking) {
+          // We need to import and use the store's applyOptimisticDamage directly
+          // because the hook's applyOptimistic is for receiving damage, not dealing it
+          const { applyOptimisticDamage } = useCombatStore.getState();
+          const transactionId = applyOptimisticDamage(userConnectionId, userAttacking, 2);
           console.log(`⚡ Applied optimistic damage on attack animation (txn: ${transactionId})`);
 
           // Send ATTACK message with transaction ID - this is the only place we send attackingPlayer
