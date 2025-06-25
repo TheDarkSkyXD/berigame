@@ -754,6 +754,7 @@ exports.handler = async function (event, context) {
           lastPositionUpdate: timestamp,
           // Attack cooldown tracking
           lastAttackTime: 0, // Initialize to allow immediate first attack
+          positionHistory: [{ position: SPAWN_LOCATION.position, timestamp }],
           violationCount: 0,
           lastViolationTime: 0,
           updateCount: 0,
