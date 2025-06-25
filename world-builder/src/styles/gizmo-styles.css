@@ -1,0 +1,274 @@
+/* Styles for 3D Gizmo HTML Annotations */
+
+/* PivotControls annotations */
+.world-builder-annotation {
+  background: linear-gradient(135deg, rgba(76, 175, 80, 0.95), rgba(56, 142, 60, 0.95));
+  color: white;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-family: 'Arial', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+}
+
+/* Animation for appearing annotations */
+.world-builder-annotation {
+  animation: fadeInScale 0.2s ease-out;
+}
+
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Transform Controls Panel */
+.transform-controls-panel {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 15px;
+  border-radius: 8px;
+  font-family: 'Arial', sans-serif;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  min-width: 200px;
+}
+
+.transform-controls-panel h3 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  color: #4CAF50;
+  text-align: center;
+}
+
+.transform-controls-panel .control-group {
+  margin-bottom: 12px;
+}
+
+.transform-controls-panel label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ccc;
+}
+
+.transform-controls-panel select {
+  width: 100%;
+  background: #333;
+  color: white;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.transform-controls-panel .button-group {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.transform-controls-panel button {
+  flex: 1;
+  background: #555;
+  color: white;
+  border: none;
+  padding: 8px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.transform-controls-panel button:hover {
+  background: #666;
+  transform: translateY(-1px);
+}
+
+.transform-controls-panel button.active {
+  background: #4CAF50;
+  box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3);
+}
+
+.transform-controls-panel button.danger {
+  background: #f44336;
+}
+
+.transform-controls-panel button.danger:hover {
+  background: #d32f2f;
+}
+
+.transform-controls-panel .selected-info {
+  padding: 8px;
+  background: rgba(76, 175, 80, 0.1);
+  border-radius: 4px;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+  font-size: 11px;
+  text-align: center;
+  color: #4CAF50;
+}
+
+/* Transform Values Display */
+.transform-values-panel {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 15px;
+  border-radius: 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  min-width: 220px;
+}
+
+.transform-values-panel h4 {
+  margin: 0 0 10px 0;
+  color: #4CAF50;
+  font-size: 14px;
+  font-family: 'Arial', sans-serif;
+  text-align: center;
+}
+
+.transform-values-panel .value-row {
+  display: flex;
+  justify-content: space-between;
+  margin: 6px 0;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.transform-values-panel .value-label {
+  color: #ccc;
+  font-weight: bold;
+  min-width: 60px;
+}
+
+.transform-values-panel .value-data {
+  color: white;
+  text-align: right;
+  font-family: 'Courier New', monospace;
+}
+
+.transform-values-panel .axis-x { color: #ff6b6b; }
+.transform-values-panel .axis-y { color: #51cf66; }
+.transform-values-panel .axis-z { color: #339af0; }
+
+/* Keyboard Shortcuts Help */
+.keyboard-help-panel {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+  padding: 12px;
+  border-radius: 6px;
+  font-family: 'Arial', sans-serif;
+  font-size: 11px;
+  max-width: 280px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.keyboard-help-panel h5 {
+  margin: 0 0 8px 0;
+  color: #4CAF50;
+  font-size: 12px;
+  text-align: center;
+}
+
+.keyboard-help-panel .shortcut {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 0;
+  align-items: center;
+}
+
+.keyboard-help-panel .key {
+  background: #333;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  border: 1px solid #555;
+  min-width: 20px;
+  text-align: center;
+}
+
+.keyboard-help-panel .description {
+  color: #ccc;
+  font-size: 10px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1024px) {
+  .transform-controls-panel,
+  .transform-values-panel {
+    position: relative;
+    margin: 10px;
+    width: calc(100% - 20px);
+  }
+  
+  .keyboard-help-panel {
+    display: none;
+  }
+}
+
+/* Smooth transitions */
+.transform-controls-panel,
+.transform-values-panel,
+.keyboard-help-panel {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.transform-controls-panel:hover,
+.transform-values-panel:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
+}
+
+/* Custom scrollbar for panels */
+.transform-controls-panel::-webkit-scrollbar,
+.transform-values-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.transform-controls-panel::-webkit-scrollbar-track,
+.transform-values-panel::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.transform-controls-panel::-webkit-scrollbar-thumb,
+.transform-values-panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+}
+
+.transform-controls-panel::-webkit-scrollbar-thumb:hover,
+.transform-values-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}

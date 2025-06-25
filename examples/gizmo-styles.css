@@ -1,0 +1,240 @@
+/* Styles for 3D Gizmo HTML Annotations */
+
+/* PivotControls annotations */
+.transform-annotation {
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  font-weight: bold;
+  border: 1px solid #333;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.world-builder-annotation {
+  background: linear-gradient(135deg, rgba(76, 175, 80, 0.9), rgba(56, 142, 60, 0.9));
+  color: white;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-family: 'Arial', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* Axis-specific annotation colors */
+.transform-annotation.x-axis {
+  background: rgba(255, 68, 68, 0.9);
+  border-color: #ff4444;
+}
+
+.transform-annotation.y-axis {
+  background: rgba(68, 255, 68, 0.9);
+  border-color: #44ff44;
+}
+
+.transform-annotation.z-axis {
+  background: rgba(68, 68, 255, 0.9);
+  border-color: #4444ff;
+}
+
+/* Animation for appearing annotations */
+.transform-annotation {
+  animation: fadeInScale 0.2s ease-out;
+}
+
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Gizmo UI Controls */
+.gizmo-controls {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+  padding: 15px;
+  border-radius: 8px;
+  font-family: 'Arial', sans-serif;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(5px);
+}
+
+.gizmo-controls h3 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  color: #4CAF50;
+}
+
+.gizmo-controls label {
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.gizmo-controls select {
+  background: #333;
+  color: white;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.gizmo-controls button {
+  background: #666;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  margin: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition: background-color 0.2s ease;
+}
+
+.gizmo-controls button:hover {
+  background: #777;
+}
+
+.gizmo-controls button.active {
+  background: #4CAF50;
+}
+
+.gizmo-controls button.danger {
+  background: #f44336;
+}
+
+.gizmo-controls button.danger:hover {
+  background: #d32f2f;
+}
+
+/* Transform values display */
+.transform-values {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+  padding: 15px;
+  border-radius: 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(5px);
+  min-width: 200px;
+}
+
+.transform-values h4 {
+  margin: 0 0 8px 0;
+  color: #4CAF50;
+  font-size: 14px;
+}
+
+.transform-values .value-row {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 0;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.transform-values .value-label {
+  color: #ccc;
+  font-weight: bold;
+}
+
+.transform-values .value-data {
+  color: white;
+  text-align: right;
+}
+
+/* Keyboard shortcuts help */
+.keyboard-help {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 10px;
+  border-radius: 6px;
+  font-family: 'Arial', sans-serif;
+  font-size: 11px;
+  max-width: 250px;
+}
+
+.keyboard-help h5 {
+  margin: 0 0 6px 0;
+  color: #4CAF50;
+  font-size: 12px;
+}
+
+.keyboard-help .shortcut {
+  display: flex;
+  justify-content: space-between;
+  margin: 2px 0;
+}
+
+.keyboard-help .key {
+  background: #333;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .gizmo-controls,
+  .transform-values {
+    position: relative;
+    margin: 10px;
+    width: calc(100% - 20px);
+  }
+  
+  .keyboard-help {
+    display: none;
+  }
+}
+
+/* Custom scrollbar for controls */
+.gizmo-controls::-webkit-scrollbar {
+  width: 6px;
+}
+
+.gizmo-controls::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.gizmo-controls::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+.gizmo-controls::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}

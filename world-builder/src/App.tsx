@@ -1,11 +1,58 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import WorldBuilderCanvas from './components/WorldBuilderCanvas';
 import ObjectPalette from './components/ObjectPalette';
 import WorldSaver from './components/WorldSaver';
+import { TransformControlsPanel, TransformValuesPanel, KeyboardHelpPanel } from './components/TransformControls';
 import { useWorldBuilderStore } from './store/worldBuilderStore';
 
 const App: React.FC = () => {
-  const { currentWorld, isPreviewMode } = useWorldBuilderStore();
+  const {
+    currentWorld,
+    isPreviewMode,
+    selectedObjectId,
+    transformMode,
+    setTransformMode,
+    selectObject,
+    removeObject
+  } = useWorldBuilderStore();
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return; // Don't trigger shortcuts when typing in inputs
+      }
+
+      switch (event.key.toLowerCase()) {
+        case 'g':
+          event.preventDefault();
+          setTransformMode('translate');
+          break;
+        case 'r':
+          event.preventDefault();
+          setTransformMode('rotate');
+          break;
+        case 's':
+          event.preventDefault();
+          setTransformMode('scale');
+          break;
+        case 'escape':
+          event.preventDefault();
+          selectObject(null);
+          break;
+        case 'delete':
+        case 'backspace':
+          if (selectedObjectId) {
+            event.preventDefault();
+            removeObject(selectedObjectId);
+          }
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedObjectId, setTransformMode, selectObject, removeObject]);
 
   return (
     <div style={{ 
@@ -54,18 +101,39 @@ const App: React.FC = () => {
       {/* Main Canvas Area */}
       <div style={{ flex: 1, position: 'relative' }}>
         <WorldBuilderCanvas />
-        
+
+        {/* Transform Controls Overlay */}
+        {!isPreviewMode && <TransformControlsPanel />}
+        {!isPreviewMode && <TransformValuesPanel />}
+        {!isPreviewMode && <KeyboardHelpPanel />}
+
         {/* Top-right controls */}
         <div style={{
           position: 'absolute',
           top: '20px',
           right: '20px',
           display: 'flex',
+          flexDirection: 'column',
           gap: '10px',
           zIndex: 1000
         }}>
-          <ModeToggle />
-          <GridControls />
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <ModeToggle />
+            <GridControls />
+          </div>
+          {!isPreviewMode && (
+            <div style={{
+              background: 'rgba(0, 0, 0, 0.8)',
+              color: 'white',
+              padding: '8px 12px',
+              borderRadius: '4px',
+              fontSize: '12px',
+              textAlign: 'center',
+              border: '1px solid rgba(255, 255, 255, 0.1)'
+            }}>
+              Mode: {transformMode.toUpperCase()} ({transformMode === 'translate' ? 'G' : transformMode === 'rotate' ? 'R' : 'S'})
+            </div>
+          )}
         </div>
       </div>
     </div>

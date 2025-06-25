@@ -4,14 +4,19 @@ import { WorldConfiguration, WorldObject, ObjectType, Vector3 } from '../types/W
 interface WorldBuilderState {
   // Current world being edited
   currentWorld: WorldConfiguration | null;
-  
+
   // UI state
   selectedObjectId: string | null;
   isPreviewMode: boolean;
   showGrid: boolean;
   snapToGrid: boolean;
   gridSize: number;
-  
+
+  // Transform controls
+  transformMode: 'translate' | 'rotate' | 'scale';
+  gizmoType: 'pivot' | 'transform';
+  showTransformValues: boolean;
+
   // Camera state
   cameraPosition: Vector3;
   cameraTarget: Vector3;
@@ -28,6 +33,11 @@ interface WorldBuilderState {
   setGridSize: (size: number) => void;
   setCameraPosition: (position: Vector3) => void;
   setCameraTarget: (target: Vector3) => void;
+
+  // Transform control actions
+  setTransformMode: (mode: 'translate' | 'rotate' | 'scale') => void;
+  setGizmoType: (type: 'pivot' | 'transform') => void;
+  setShowTransformValues: (show: boolean) => void;
   
   // World management
   createNewWorld: (name: string, description?: string) => void;
@@ -47,6 +57,9 @@ export const useWorldBuilderStore = create<WorldBuilderState>((set, get) => ({
   showGrid: true,
   snapToGrid: true,
   gridSize: 1,
+  transformMode: 'translate',
+  gizmoType: 'pivot',
+  showTransformValues: true,
   cameraPosition: { x: 10, y: 10, z: 10 },
   cameraTarget: { x: 0, y: 0, z: 0 },
   
@@ -123,6 +136,11 @@ export const useWorldBuilderStore = create<WorldBuilderState>((set, get) => ({
   setGridSize: (size) => set({ gridSize: size }),
   setCameraPosition: (position) => set({ cameraPosition: position }),
   setCameraTarget: (target) => set({ cameraTarget: target }),
+
+  // Transform control actions
+  setTransformMode: (mode) => set({ transformMode: mode }),
+  setGizmoType: (type) => set({ gizmoType: type }),
+  setShowTransformValues: (show) => set({ showTransformValues: show }),
   
   createNewWorld: (name, description = '') => {
     const newWorld: WorldConfiguration = {

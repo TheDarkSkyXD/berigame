@@ -1,6 +1,6 @@
 import React, { Suspense, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Grid, useGLTF } from '@react-three/drei';
+import { OrbitControls, Grid, useGLTF, PivotControls, TransformControls } from '@react-three/drei';
 import { useWorldBuilderStore } from '../store/worldBuilderStore';
 import { WorldObject } from '../types/WorldTypes';
 import * as THREE from 'three';
@@ -45,7 +45,8 @@ const WorldBuilderCanvas: React.FC = () => {
         <hemisphereLight intensity={0.3} />
 
         {/* Controls */}
-        <OrbitControls 
+        <OrbitControls
+          makeDefault
           enablePan={true}
           enableZoom={true}
           enableRotate={true}
@@ -80,8 +81,8 @@ const WorldBuilderCanvas: React.FC = () => {
 
         {/* World objects */}
         {currentWorld?.objects.map(obj => (
-          <WorldObjectRenderer 
-            key={obj.id} 
+          <EnhancedWorldObjectRenderer
+            key={obj.id}
             object={obj}
             isSelected={selectedObjectId === obj.id}
             isPreviewMode={isPreviewMode}
@@ -92,40 +93,63 @@ const WorldBuilderCanvas: React.FC = () => {
   );
 };
 
-interface WorldObjectRendererProps {
+interface EnhancedWorldObjectRendererProps {
   object: WorldObject;
   isSelected: boolean;
   isPreviewMode: boolean;
 }
 
-const WorldObjectRenderer: React.FC<WorldObjectRendererProps> = ({ 
-  object, 
-  isSelected, 
-  isPreviewMode 
+const EnhancedWorldObjectRenderer: React.FC<EnhancedWorldObjectRendererProps> = ({
+  object,
+  isSelected,
+  isPreviewMode
 }) => {
-  const { selectObject, updateObject } = useWorldBuilderStore();
+  const { selectObject, updateObject, transformMode, gizmoType } = useWorldBuilderStore();
   const meshRef = useRef<THREE.Group>(null);
 
   const handleClick = (event: any) => {
     if (isPreviewMode) return;
-    
+
     event.stopPropagation();
     selectObject(object.id);
   };
 
-  const handleDrag = (event: any) => {
-    if (isPreviewMode || !isSelected) return;
-    
-    const newPosition = {
-      x: event.object.position.x,
-      y: object.position.y, // Keep Y position fixed for now
-      z: event.object.position.z
-    };
-    
-    updateObject(object.id, { position: newPosition });
+  const handlePivotTransform = (
+    localMatrix: THREE.Matrix4,
+    deltaLocal: THREE.Matrix4,
+    worldMatrix: THREE.Matrix4,
+    deltaWorld: THREE.Matrix4
+  ) => {
+    // Extract position, rotation, scale from world matrix
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    worldMatrix.decompose(pos, quat, scl);
+
+    const euler = new THREE.Euler().setFromQuaternion(quat);
+
+    updateObject(object.id, {
+      position: { x: pos.x, y: pos.y, z: pos.z },
+      rotation: { x: euler.x, y: euler.y, z: euler.z },
+      scale: { x: scl.x, y: scl.y, z: scl.z }
+    });
   };
 
-  return (
+  const handleTransformChange = () => {
+    if (meshRef.current) {
+      const pos = meshRef.current.position;
+      const rot = meshRef.current.rotation;
+      const scl = meshRef.current.scale;
+
+      updateObject(object.id, {
+        position: { x: pos.x, y: pos.y, z: pos.z },
+        rotation: { x: rot.x, y: rot.y, z: rot.z },
+        scale: { x: scl.x, y: scl.y, z: scl.z }
+      });
+    }
+  };
+
+  const renderObjectMesh = () => (
     <group
       ref={meshRef}
       position={[object.position.x, object.position.y, object.position.z]}
@@ -140,11 +164,58 @@ const WorldObjectRenderer: React.FC<WorldObjectRendererProps> = ({
           <meshBasicMaterial color="#4CAF50" transparent opacity={0.3} />
         </mesh>
       )}
-      
+
       {/* Render the actual object */}
       <ObjectMesh object={object} />
     </group>
   );
+
+  // Show gizmo controls only for selected object
+  if (isSelected && !isPreviewMode) {
+    if (gizmoType === 'pivot') {
+      return (
+        <PivotControls
+          // Configure based on transform mode
+          disableAxes={transformMode !== 'translate'}
+          disableRotations={transformMode !== 'rotate'}
+          disableScaling={transformMode !== 'scale'}
+
+          // Visual settings
+          scale={1.2}
+          lineWidth={3}
+          axisColors={['#ff4444', '#44ff44', '#4444ff']} // Red, Green, Blue for X, Y, Z
+          hoveredColor="#ffff44"
+
+          // Features
+          annotations={true}
+          annotationsClass="world-builder-annotation"
+
+          // Events
+          onDragStart={() => console.log(`Started transforming ${object.id}`)}
+          onDrag={handlePivotTransform}
+          onDragEnd={() => console.log(`Finished transforming ${object.id}`)}
+
+          // Auto-apply transforms
+          autoTransform={false} // We handle manually for better control
+        >
+          {renderObjectMesh()}
+        </PivotControls>
+      );
+    } else {
+      return (
+        <>
+          <TransformControls
+            object={meshRef}
+            mode={transformMode}
+            onObjectChange={handleTransformChange}
+          />
+          {renderObjectMesh()}
+        </>
+      );
+    }
+  }
+
+  return renderObjectMesh();
 };
 
 const ObjectMesh: React.FC<{ object: WorldObject }> = ({ object }) => {
